@@ -47,7 +47,8 @@ jobs:
           } else {
             $tag = $env:REF_NAME
             $version = $tag -replace '^v', ''
-            $notes = git tag -l $tag --format='%(contents)'
+            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+            $notes = git for-each-ref "refs/tags/$tag" --format='%(contents)'
             if (-not $notes) {
               $notes = git log -1 --pretty=%B
             }
