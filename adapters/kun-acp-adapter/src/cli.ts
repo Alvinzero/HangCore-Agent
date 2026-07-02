@@ -1,0 +1,69 @@
+#!/usr/bin/env bun
+import { startStdio } from './acpServer';
+
+const VERSION = '0.1.2';
+
+type CliOptions = {
+  stdio: boolean;
+  baseUrl?: string;
+  token?: string;
+  model?: string;
+  help: boolean;
+  version: boolean;
+};
+
+function parseArgs(argv: string[]): CliOptions {
+  const options: CliOptions = { stdio: false, help: false, version: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--stdio') options.stdio = true;
+    else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--version' || arg === '-V') options.version = true;
+    else if (arg === '--base-url' || arg === '--runtime-url') options.baseUrl = argv[++i];
+    else if (arg.startsWith('--base-url=')) options.baseUrl = arg.slice('--base-url='.length);
+    else if (arg.startsWith('--runtime-url=')) options.baseUrl = arg.slice('--runtime-url='.length);
+    else if (arg === '--token' || arg === '--runtime-token') options.token = argv[++i];
+    else if (arg.startsWith('--token=')) options.token = arg.slice('--token='.length);
+    else if (arg.startsWith('--runtime-token=')) options.token = arg.slice('--runtime-token='.length);
+    else if (arg === '--model') options.model = argv[++i];
+    else if (arg.startsWith('--model=')) options.model = arg.slice('--model='.length);
+  }
+  return options;
+}
+
+const USAGE = `kun-acp-adapter ${VERSION}
+
+Usage:
+  kun-acp-adapter --stdio [--runtime-url http://127.0.0.1:18899] [--runtime-token TOKEN]
+
+Environment:
+  KUN_RUNTIME_URL    Kun HTTP/SSE runtime URL. Default: http://127.0.0.1:18899
+  KUN_RUNTIME_TOKEN  Bearer token for Kun runtime, if Kun was started with one
+  KUN_THREAD_MODEL   Kun thread model used when the ACP session creates a Kun thread
+`;
+
+async function main(): Promise<number> {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.version) {
+    process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
+  if (options.help || !options.stdio) {
+    process.stdout.write(USAGE);
+    return options.help ? 0 : 64;
+  }
+  await startStdio({
+    baseUrl: options.baseUrl,
+    runtimeToken: options.token,
+    model: options.model,
+  });
+  return 0;
+}
+
+main().then(
+  (code) => process.exit(code),
+  (error) => {
+    process.stderr.write(`[kun-acp-adapter] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exit(70);
+  }
+);

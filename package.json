@@ -1,9 +1,9 @@
 {
   "name": "nomifun-tauri",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "Apache-2.0",
-  "workspaces": ["ui"],
+  "workspaces": ["ui", "adapters/kun-acp-adapter"],
   "scripts": {
     "dev": "bun scripts/prune-build.mjs && bun scripts/free-ports.mjs 5173 && bun scripts/kill-stale-dev.mjs && bun scripts/ensure-ui-dist.mjs && NOMI_CHANNEL=dev tauri dev --config apps/desktop/tauri.conf.json --config apps/desktop/tauri.dev.conf.json",
     "dev:web": "bun scripts/prune-build.mjs && bun scripts/free-ports.mjs 5173 8787 && concurrently -k -n api,ui -c blue,magenta \"cargo run -p nomifun-web -- --port 8787 --dist ui/dist --insecure-no-auth\" \"bun run --filter=./ui dev:web\"",
@@ -14,6 +14,7 @@
     "build:linux": "bash scripts/desktop-build-linux.sh",
     "build:signed": "bash scripts/desktop-build-signed.sh",
     "build:updater": "CI=true tauri build --config apps/desktop/tauri.conf.json --config '{\"bundle\":{\"createUpdaterArtifacts\":true}}' && bun scripts/prune-build.mjs --post",
+    "test:kun-adapter": "bun test adapters/kun-acp-adapter/test",
     "make:latest": "bun scripts/make-latest-json.mjs",
     "release:mac": "bun scripts/run-mac-release.mjs",
     "release:win": "bun scripts/run-win-release.mjs",

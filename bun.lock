@@ -9,9 +9,16 @@
         "concurrently": "^9.2.1",
       },
     },
+    "adapters/kun-acp-adapter": {
+      "name": "@hangcore/kun-acp-adapter",
+      "version": "0.1.2",
+      "bin": {
+        "kun-acp-adapter": "./bin/kun-acp-adapter",
+      },
+    },
     "ui": {
       "name": "@nomifun-tauri/ui",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@agentclientprotocol/sdk": "^0.18.2",
         "@anthropic-ai/sdk": "^0.71.2",
@@ -361,6 +368,8 @@
     "@grammyjs/transformer-throttler": ["@grammyjs/transformer-throttler@1.2.1", "https://registry.npmmirror.com/@grammyjs/transformer-throttler/-/transformer-throttler-1.2.1.tgz", { "dependencies": { "bottleneck": "^2.0.0" }, "peerDependencies": { "grammy": "^1.0.0" } }, "sha512-CpWB0F3rJdUiKsq7826QhQsxbZi4wqfz1ccKX+fr+AOC+o8K7ZvS+wqX0suSu1QCsyUq2MDpNiKhyL2ZOJUS4w=="],
 
     "@grammyjs/types": ["@grammyjs/types@3.27.3", "https://registry.npmmirror.com/@grammyjs/types/-/types-3.27.3.tgz", {}, "sha512-yUKMLliGsGbnxu96YUJ7km7B0zy4PzeH/Jvti5705R/LeKDMqkDV4DckMSt+OrliWQpTwQljHE0QLol5zgxBkg=="],
+
+    "@hangcore/kun-acp-adapter": ["@hangcore/kun-acp-adapter@workspace:adapters/kun-acp-adapter"],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "https://registry.npmmirror.com/@hono/node-server/-/node-server-1.19.14.tgz", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

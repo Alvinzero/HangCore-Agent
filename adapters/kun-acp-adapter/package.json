@@ -1,0 +1,13 @@
+{
+  "name": "@hangcore/kun-acp-adapter",
+  "private": true,
+  "version": "0.1.2",
+  "type": "module",
+  "bin": {
+    "kun-acp-adapter": "./bin/kun-acp-adapter"
+  },
+  "scripts": {
+    "test": "bun test test"
+  },
+  "license": "Apache-2.0"
+}

@@ -98,6 +98,7 @@ fn merge_paths(bun_dir: Option<&Path>, extras: &[PathBuf], current: &str, login:
 
 fn platform_extra_bins() -> Vec<PathBuf> {
     let mut out = platform_extra_bins_at(dirs::home_dir().as_deref());
+    out.extend(bundled_adapter_bins());
     // Env-var-driven install locations. Kept out of `platform_extra_bins_at`
     // so that function stays a pure function of `home` for unit tests; the
     // real env is only read here.
@@ -219,6 +220,64 @@ fn platform_extra_bins_at(home: Option<&Path>) -> Vec<PathBuf> {
         }
     }
 
+    out
+}
+
+fn bundled_adapter_bins() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(raw) = std::env::var("HANGCORE_ADAPTER_BIN_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("adapters").join("kun-acp-adapter").join("bin"));
+    }
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.extend(adapter_bin_candidates_from_exe_dir(exe_dir));
+    }
+
+    dedupe_existing_dirs(candidates)
+}
+
+fn adapter_bin_candidates_from_exe_dir(exe_dir: &Path) -> Vec<PathBuf> {
+    let rel = Path::new("adapters").join("kun-acp-adapter").join("bin");
+    let encoded_rel = Path::new("_up_")
+        .join("_up_")
+        .join("adapters")
+        .join("kun-acp-adapter")
+        .join("bin");
+    let mut candidates = vec![
+        exe_dir.join(&rel),
+        exe_dir.join("bin"),
+        exe_dir.join("kun-acp-adapter").join("bin"),
+        exe_dir.join("resources").join(&rel),
+        exe_dir.join("resources").join("bin"),
+        exe_dir.join("resources").join("kun-acp-adapter").join("bin"),
+        exe_dir.join("resources").join(&encoded_rel),
+        exe_dir.join(&encoded_rel),
+    ];
+    if let Some(parent) = exe_dir.parent() {
+        candidates.push(parent.join("Resources").join(&rel));
+        candidates.push(parent.join("Resources").join(&encoded_rel));
+    }
+    candidates
+}
+
+fn dedupe_existing_dirs(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        if candidate.is_dir() && seen.insert(candidate.clone()) {
+            out.push(candidate);
+        }
+    }
     out
 }
 
@@ -604,6 +663,36 @@ mod tests {
         assert!(
             !bins.iter().any(|p| p.ends_with("nope/bin")),
             "non-existent VOLTA_HOME/bin must be filtered: {bins:?}"
+        );
+    }
+
+    #[test]
+    fn adapter_bin_candidates_cover_tauri_resource_layouts() {
+        let exe_dir = Path::new("C:/Program Files/HangCore Agent");
+        let candidates = adapter_bin_candidates_from_exe_dir(exe_dir);
+        let tail = |segs: &[&str]| segs.iter().collect::<PathBuf>();
+
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(tail(&["resources", "adapters", "kun-acp-adapter", "bin"]))),
+            "expected resources/adapters/kun-acp-adapter/bin in {candidates:?}"
+        );
+        assert!(
+            candidates.iter().any(|p| p.ends_with(tail(&["resources", "bin"]))),
+            "expected resources/bin in {candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(tail(&["resources", "kun-acp-adapter", "bin"]))),
+            "expected resources/kun-acp-adapter/bin in {candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(tail(&["resources", "_up_", "_up_", "adapters", "kun-acp-adapter", "bin"]))),
+            "expected encoded _up_ resource path in {candidates:?}"
         );
     }
 

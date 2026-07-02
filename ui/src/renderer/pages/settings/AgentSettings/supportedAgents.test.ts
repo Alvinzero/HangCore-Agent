@@ -47,6 +47,8 @@ describe('SUPPORTED_AGENTS install guidance', () => {
     expect(kun.name).toBe('Kun Agent');
     expect(kun.binary).toBe('kun-acp-adapter');
     expect(kun.installHint).toBe('');
-    expect(kun.website).toBe('https://github.com/Alvinzero/HangCore-Agent/releases');
+    expect(kun.website).toBe(
+      'https://github.com/Alvinzero/HangCore-Agent/blob/main/docs/hangshun/implementation/kun-agent-install.md'
+    );
   });
 });
