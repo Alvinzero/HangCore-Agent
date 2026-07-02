@@ -138,6 +138,12 @@ function findSigs(bundleDir) {
   return found;
 }
 
+// GitHub Release assets normalize spaces in uploaded filenames to dots. The
+// updater manifest must use the final asset URL, not the pre-upload local path.
+function githubReleaseAssetName(name) {
+  return name.replace(/\s+/g, '.');
+}
+
 // ── 扫描 target/ ────────────────────────────────────────────────────────────
 if (!existsSync(TARGET)) {
   console.error(`✗ 找不到 target/（${rel(TARGET)}）。先构建更新产物：bun run build:updater`);
@@ -165,7 +171,8 @@ for (const { dir, triple } of bundleDirs) {
   for (const { artifact, sig } of findSigs(dir)) {
     const name = basename(artifact);
     const signature = readFileSync(sig, 'utf8').trim();
-    const url = `https://github.com/${repo}/releases/download/v${version}/${encodeURIComponent(name)}`;
+    const assetName = githubReleaseAssetName(name);
+    const url = `https://github.com/${repo}/releases/download/v${version}/${encodeURIComponent(assetName)}`;
     for (const key of keys) {
       if (collected[key]) {
         console.warn(`  ! ${key} 多个候选产物，后者覆盖：${basename(collected[key].artifact)} → ${name}`);

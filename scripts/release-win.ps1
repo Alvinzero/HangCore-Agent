@@ -136,8 +136,8 @@ if ($Mode -eq 'CREATE' -and (-not $NotesContent)) {
 }
 
 $NsisDir = "target/$Triple/release/bundle/nsis"
-$Exe     = "$NsisDir/HangCore Agent_${TargetVersion}_x64-setup.exe"
-$Sig     = "$Exe.sig"
+$ExePattern = "*_${TargetVersion}_x64-setup.exe"
+$ExeLabel   = "$NsisDir/$ExePattern"
 
 # ── 计划 ─────────────────────────────────────────────────────────────────────
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -147,7 +147,7 @@ Write-Host "  账号      : $login"
 Write-Host "  版本      : $TargetVersion   (tag $Tag)"
 if ($NeedBump) { Write-Host "  版本变更  : $CurVer → $TargetVersion（将执行 bun run bump）" } else { Write-Host "  版本变更  : 无（沿用当前 $CurVer）" }
 Write-Host "  仓库      : $Repo"
-Write-Host "  目标产物  : $Exe (+ .sig)"
+Write-Host "  目标产物  : $ExeLabel (+ .sig)"
 if ($Mode -eq 'CREATE') { Write-Host "  release note: $(if ($NotesFile) { "文件 $NotesFile" } else { '内联 -Notes' })（首发建 Release 用）" }
 elseif ($NotesContent) { Write-Host "  release note: 提供了，将同时更新 Release 正文与 latest.json notes" }
 else { Write-Host "  release note: 未提供，沿用既有（latest.json notes 由 CHANGELOG 当前版本小节兜底）" }
@@ -186,6 +186,10 @@ if (Test-Path $NsisDir) {
 Write-Host "▶ 构建 Windows 自动更新产物（Rust release，耗时较长）..."
 & bun run build:win --config $UpdaterConf
 if ($LASTEXITCODE -ne 0) { Fail "构建失败。" }
+$ExeItem = Get-ChildItem -Path $NsisDir -File -Filter $ExePattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $ExeItem) { Fail "构建后未找到产物: $ExeLabel" }
+$Exe = $ExeItem.FullName
+$Sig = "$Exe.sig"
 if (-not (Test-Path $Exe)) { Fail "构建后未找到产物: $Exe" }
 if (-not (Test-Path $Sig)) { Fail "构建后未找到 updater 签名: $Sig" }
 

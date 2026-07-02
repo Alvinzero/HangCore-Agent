@@ -87,6 +87,15 @@ jobs:
           if ($manifest.platforms.'windows-x86_64'.url -notlike "*Alvinzero/HangCore-Agent*") {
             throw "latest.json Windows URL does not point to Alvinzero/HangCore-Agent"
           }
+          $exe = Get-ChildItem dist/desktop -File -Filter "*.exe" | Select-Object -First 1
+          if (-not $exe) {
+            throw "Missing Windows exe in dist/desktop"
+          }
+          $expectedAssetName = $exe.Name -replace '\s+', '.'
+          $expectedUrlLeaf = [System.Uri]::EscapeDataString($expectedAssetName)
+          if ($manifest.platforms.'windows-x86_64'.url -notlike "*/$expectedUrlLeaf") {
+            throw "latest.json Windows URL does not match GitHub release asset name $expectedAssetName"
+          }
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
