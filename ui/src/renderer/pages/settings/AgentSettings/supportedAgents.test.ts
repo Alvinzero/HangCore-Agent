@@ -40,4 +40,13 @@ describe('SUPPORTED_AGENTS install guidance', () => {
     expect(websites.some((url) => url.includes('block.github.io/goose'))).toBe(false);
     expect(websites.some((url) => url.includes('snowcli.dev'))).toBe(false);
   });
+
+  test('surfaces Kun as an experimental local ACP adapter without one-click install', () => {
+    const kun = agent('kun');
+
+    expect(kun.name).toBe('Kun Agent');
+    expect(kun.binary).toBe('kun-acp-adapter');
+    expect(kun.installHint).toBe('');
+    expect(kun.website).toBe('https://github.com/Alvinzero/HangCore-Agent/releases');
+  });
 });

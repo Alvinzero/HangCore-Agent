@@ -419,6 +419,16 @@ VALUES
      3130,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
+    ('agent_builtin_kun', NULL, 'Kun Agent',
+     'kun', 'acp', 'builtin', '{"binary_name":"kun-acp-adapter"}',
+     1, 'kun-acp-adapter', '["--stdio"]', '[]',
+     '[".kun/skills"]',
+     '{"supports_side_question":false,"supports_team":true}',
+     NULL,
+     NULL, NULL,
+     3140,
+     unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
+
     ('agent_builtin_hermes', '/api/assets/logos/brand/hermes.svg', 'Hermes',
      'hermes', 'acp', 'builtin', '{"binary_name":"hermes"}',
      1, 'hermes', '["acp"]', '[]',

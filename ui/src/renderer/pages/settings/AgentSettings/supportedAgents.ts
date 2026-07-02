@@ -142,6 +142,13 @@ export const SUPPORTED_AGENTS: SupportedAgent[] = [
     binary: 'kiro-cli',
   },
   {
+    backend: 'kun',
+    name: 'Kun Agent',
+    website: 'https://github.com/Alvinzero/HangCore-Agent/releases',
+    installHint: '',
+    binary: 'kun-acp-adapter',
+  },
+  {
     backend: 'hermes',
     name: 'Hermes Agent',
     website: 'https://hermes-agent.nousresearch.com/docs/getting-started/quickstart',
