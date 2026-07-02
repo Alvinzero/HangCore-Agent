@@ -1,0 +1,1892 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use nomi_agent::session::SessionManager;
+use nomi_config::config::{McpServerConfig, TransportType};
+use nomifun_api_types::{GatewayMcpConfig, NomiBuildExtra, SessionMcpServer, SessionMcpTransport};
+use nomifun_common::AppError;
+use nomifun_db::IMcpServerRepository;
+use nomifun_db::ISettingsRepository;
+use nomifun_db::models::McpServerRow;
+use nomifun_runtime::resolve_command_path;
+use tracing::{debug, info, warn};
+
+use crate::agent_task::AgentInstance;
+use crate::factory::AgentFactoryDeps;
+use crate::factory::context::FactoryContext;
+use crate::manager::nomi::{NomiAgentManager, sanitize_session_messages};
+use crate::types::{BuildTaskOptions, NomiCompatOverrides, NomiResolvedConfig};
+
+pub(super) async fn build(
+    deps: Arc<AgentFactoryDeps>,
+    options: BuildTaskOptions,
+    ctx: FactoryContext,
+) -> Result<AgentInstance, AppError> {
+    let mut overrides: NomiBuildExtra = serde_json::from_value(options.extra).unwrap_or_default();
+
+    // Merge preset assistant rules into system_prompt (used as custom_prompt
+    // in nomi's build_system_prompt). Mirrors the old architecture's
+    // `init_history` injection of `[Assistant System Rules]`.
+    if let Some(rules) = overrides.preset_rules.take() {
+        overrides.system_prompt = Some(match overrides.system_prompt.take() {
+            Some(existing) => format!("{existing}\n\n{rules}"),
+            None => rules,
+        });
+    }
+
+    // Companion-companion sessions without a persisted persona prompt (channel
+    // master-agent sessions) get one built fresh per agent build, so the
+    // embedded memory snapshot stays current across restarts. `extra.companionId`
+    // picks the persona (per-bot binding > legacy platform binding); when no
+    // companion is bound (None / dead id) there is no persona — an unbound channel
+    // is hosted by no companion (no default-companion fallback).
+    if overrides.companion
+        && overrides.system_prompt.is_none()
+        && let Some(provider) = deps.companion_prompt.as_ref()
+        && let Some(prompt) = provider
+            .build_system_prompt(
+                overrides.companion_id.as_deref(),
+                overrides.channel_platform.as_deref(),
+            )
+            .await
+    {
+        overrides.system_prompt = Some(prompt);
+    }
+
+    // Inject the Desktop Gateway MCP config for sessions that carry the
+    // backend-set `desktopGateway` extra flag (channel master-agent sessions,
+    // companion companion threads), mirroring acp.rs. Grants the `nomi_*` desktop
+    // tools — never injected without the flag.
+    if overrides.desktop_gateway && overrides.gateway_mcp_config.is_none() {
+        overrides
+            .gateway_mcp_config
+            .clone_from(&deps.gateway_mcp_config);
+        info!(
+            conversation_id = %ctx.conversation_id,
+            gateway_mcp_port = deps.gateway_mcp_config.as_ref().map(|c| c.port),
+            "gateway_mcp: injected into desktopGateway nomi session"
+        );
+    }
+
+    let mut extra_mcp_servers = resolve_mcp_servers(&overrides, &ctx.conversation_id);
+    if let Some(repo) = deps.mcp_server_repo.as_ref() {
+        for (name, config) in load_user_mcp_servers(
+            repo.as_ref(),
+            overrides.mcp_server_ids.as_deref(),
+            &ctx.conversation_id,
+        )
+        .await
+        {
+            extra_mcp_servers.entry(name).or_insert(config);
+        }
+    }
+    merge_session_snapshot_mcp_servers(
+        &mut extra_mcp_servers,
+        &overrides.session_mcp_servers,
+        &ctx.conversation_id,
+    );
+
+    // Per-surface write policy (spec §3.2 unit 5): companion → direct, external
+    // IM channel → disabled (P1; opt-in re-enable is P2), regular chat → the
+    // binding's staged|direct (staged default). Resolved here where the surface
+    // is known from the build extra, reusing the shared rule so the gateway path
+    // can't drift. Expressed downstream via existing signals: sink=None disables
+    // the tool; the staged bool drives placement.
+    let knowledge_write_surface = if overrides.companion {
+        nomifun_knowledge::WriteSurface::Companion
+    } else if overrides.channel_platform.is_some() {
+        nomifun_knowledge::WriteSurface::ExternalChannel
+    } else {
+        nomifun_knowledge::WriteSurface::RegularChat
+    };
+    let knowledge_write_policy = nomifun_knowledge::resolve_write_policy(
+        knowledge_write_surface,
+        &nomifun_knowledge::KnowledgeBinding {
+            enabled: true,
+            writeback: overrides.knowledge_writeback,
+            writeback_mode: overrides
+                .knowledge_writeback_mode
+                .clone()
+                .unwrap_or_else(|| "staged".to_owned()),
+            // Threaded from the binding via MountOutcome → build-extra so the
+            // external-IM-channel opt-in actually reaches resolve_write_policy;
+            // a `..Default::default()` here would pin it to `false` and keep
+            // channel write-back permanently disabled on the nomi engine.
+            channel_write_enabled: overrides.knowledge_channel_write_enabled,
+            ..Default::default()
+        },
+        &ctx.conversation_id,
+    );
+    let knowledge_write_enabled = !matches!(
+        knowledge_write_policy.mode,
+        nomifun_knowledge::WriteMode::Disabled
+    );
+    let knowledge_writeback_staged = matches!(
+        knowledge_write_policy.mode,
+        nomifun_knowledge::WriteMode::Staged { .. }
+    );
+
+    // Knowledge bases: append the mounted-bases section (per-base TOC +
+    // write-back contract) to the system prompt, so nomi-engine sessions
+    // (companion companion threads included) see the same knowledge context the
+    // ACP path gets via its preset_context.
+    overrides.system_prompt = append_knowledge_context(
+        overrides.system_prompt.take(),
+        &overrides,
+        &ctx.conversation_id,
+        knowledge_write_enabled,
+    );
+
+    // Orchestration lead (会话 entry "auto/range" models → extra.orchestrator_role
+    // == "lead"): prepend the server-authored 编排主管 system prompt so the
+    // conversation decomposes complex requirements via `nomi_run_create`. Composed
+    // LAST so the 主管 prompt leads, with the full preset/persona/knowledge prompt
+    // preserved after the separator. Tool availability is NOT granted here — the
+    // orchestration tools ride the independently-gated desktop gateway; a
+    // client-supplied role can only shape the prompt, never self-authorize tools.
+    overrides.system_prompt = compose_lead_prompt(
+        overrides.system_prompt.take(),
+        overrides.orchestrator_role.as_deref(),
+    );
+
+    // Companion-owned sessions (local 桌面伙伴 chat + IM channel master) must
+    // reply in the app's UI language, not a hardcoded one. The companion persona
+    // prompt no longer forces a language (see
+    // nomifun-companion::companion::build_companion_system_prompt), so the reply
+    // language is decided HERE from the live system setting and appended LAST —
+    // which also overrides the legacy 「用中文」 line still embedded in
+    // already-persisted local companion threads (whose extra.system_prompt was
+    // frozen at create time). Read live per build (mirrors read_bool_pref), so a
+    // language switch takes effect on the next agent (re)build. Regular chat /
+    // ACP sessions are untouched — they naturally mirror the user's language.
+    if overrides.companion || overrides.channel_platform.is_some() {
+        let lang = read_app_language(deps.settings_repo.as_ref()).await;
+        let directive = reply_language_directive(&lang);
+        overrides.system_prompt = Some(match overrides.system_prompt.take() {
+            Some(existing) => format!("{existing}\n\n{directive}"),
+            None => directive.to_owned(),
+        });
+    }
+
+    if !extra_mcp_servers.is_empty() {
+        info!(
+            conversation_id = %ctx.conversation_id,
+            mcp_count = extra_mcp_servers.len(),
+            mcp_names = ?extra_mcp_servers.keys().collect::<Vec<_>>(),
+            "Injecting MCP servers into nomi session"
+        );
+    }
+
+    let provider_id = &options.model.provider_id;
+
+    let model_id = options
+        .model
+        .use_model
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&options.model.model)
+        .to_owned();
+
+    let fields = super::provider_config::resolve_provider_fields(
+        &deps.provider_repo,
+        &deps.encryption_key,
+        provider_id,
+        &model_id,
+    )
+    .await?;
+
+    let session_directory = deps.data_dir.join("nomi-sessions");
+
+    // Stable identity of THIS conversation instance (row `created_at`). Sessions
+    // live in a global dir keyed only by the reusable integer conversation id,
+    // so after a delete + id reuse (or a DB rebaseline) a brand-new conversation
+    // can land on an old session file. `accept_owned` refuses such a stale
+    // session and starts fresh; matching/legacy(None) sessions are accepted
+    // (legacy ones migrated forward by stamping the token). See Session::owner_token.
+    let owner_token: Option<String> = options.conversation_created_at.map(|c| c.to_string());
+    let conv_created_ms = options.conversation_created_at;
+    let accept_owned = |mut session: nomi_agent::session::Session| -> Option<nomi_agent::session::Session> {
+        if !nomi_agent::session::session_belongs_to(
+            session.owner_token.as_deref(),
+            session.created_at.timestamp_millis(),
+            owner_token.as_deref(),
+            conv_created_ms,
+        ) {
+            warn!(
+                conversation_id = %ctx.conversation_id,
+                session_id = %session.id,
+                "Discarding stale nomi session (belongs to a prior conversation that reused this id); starting fresh"
+            );
+            return None;
+        }
+        // Matching or legacy(None) stamp that postdates the conversation: accept,
+        // migrating legacy forward by stamping the owner token.
+        if session.owner_token.is_none() {
+            session.owner_token = owner_token.clone();
+        }
+        Some(session)
+    };
+
+    let resume_session = {
+        let session_mgr = SessionManager::new(session_directory.clone(), 100);
+        match session_mgr.load(&ctx.conversation_id) {
+            Ok(mut session) => {
+                // Drop orphaned assistant tool-calls left behind when the user
+                // pressed Stop mid-stream. Strict providers (Ollama-style,
+                // some OpenAI-compatible proxies) reject replayed assistants
+                // with `tool_calls != null` and `content == null` when no
+                // matching tool_result follows. See ELECTRON-1HV / ELECTRON-1J6.
+                let dropped = sanitize_session_messages(&mut session.messages);
+                info!(
+                    conversation_id = %ctx.conversation_id,
+                    session_id = %session.id,
+                    message_count = session.messages.len(),
+                    sanitized_dropped = dropped,
+                    "Loaded existing nomi session for resume"
+                );
+                accept_owned(session)
+            }
+            Err(_) => {
+                // Fallback: old architecture stored sessions inside the workspace
+                let legacy_dir = std::path::Path::new(&ctx.workspace).join(".nomi/sessions");
+                let legacy_mgr = SessionManager::new(legacy_dir.clone(), 100);
+                match legacy_mgr.load(&ctx.conversation_id) {
+                    Ok(mut session) => {
+                        let dropped = sanitize_session_messages(&mut session.messages);
+                        info!(
+                            conversation_id = %ctx.conversation_id,
+                            session_id = %session.id,
+                            message_count = session.messages.len(),
+                            sanitized_dropped = dropped,
+                            "Loaded legacy nomi session from workspace"
+                        );
+                        accept_owned(session)
+                    }
+                    Err(e) => {
+                        debug!(
+                            conversation_id = %ctx.conversation_id,
+                            error = %e,
+                            "No existing nomi session found, starting fresh"
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    };
+
+    // System Settings capability toggles, read LIVE per session (toggling in
+    // System Settings affects new sessions without a restart). No setting row →
+    // host default. computer-use defaults ON on the desktop build (the only one
+    // with the feature); browser-use now also defaults ON (native CDP engine,
+    // Chrome fetched lazily on first use) — the toggle just lets the user turn
+    // it off.
+    let computer_use_default = read_bool_pref(
+        &deps,
+        PREF_COMPUTER_USE,
+        cfg!(feature = "computer-use") || env_flag("NOMIFUN_COMPUTER_USE"),
+    )
+    .await;
+    // browser-use has a cargo-feature gate (`browser-use`, desktop builds); on those
+    // builds it now defaults **ON** (user decision) — the native CDP engine launches its
+    // managed Chromium **lazily on first use**, so enabling it costs nothing until the agent
+    // actually drives a page, and it runs **silent (headless) by default** (see
+    // `agent.browserUse.silent`, host_default=true) so there is no pop-up window. The master
+    // toggle just lets the user turn it off. Builds without the feature register no browser
+    // tool regardless. `NOMIFUN_BROWSER_USE` env forces it on for feature-less parity/testing.
+    let browser_use_default = read_bool_pref(
+        &deps,
+        PREF_BROWSER_USE,
+        cfg!(feature = "browser-use") || env_flag("NOMIFUN_BROWSER_USE"),
+    )
+    .await;
+    // F1-sec: evaluate「全权模式」LIVE 值（裁决⑨，default-deny）。用户在 System Settings 显式 opt-in
+    // 的 `agent.browserUse.fullPower` 开关，每会话构造时 LIVE 读（read_bool_pref 范式，与上面的启用开关
+    // 同源），灌进 BrowserConfig.full_power → BrowserTool::with_policy → 引擎 evaluate gate。默认 OFF
+    // （host_default=false）——evaluate 是最高危逃生舱，无 opt-in 即封死。**绝不看 session_mode**（不变量⑧）。
+    let browser_full_power_default = read_bool_pref(
+        &deps,
+        PREF_BROWSER_FULL_POWER,
+        env_flag("NOMIFUN_BROWSER_FULL_POWER"),
+    )
+    .await;
+    // SD-6: 持久登录 LIVE 值（DESIGN §16/§27 互斥约束）。产品默认 ON（host_default=true）——持久登录
+    // 开启时与全权互斥（evaluate Blocked）。用户可在 System Settings 关闭以解除互斥。
+    let browser_persistent_login_default =
+        read_bool_pref(&deps, PREF_BROWSER_PERSISTENT_LOGIN, true).await;
+    // P7A: site-memory LIVE 值。host_default=false（OFF）——把站点交互持久化到磁盘是隐私相关行为，
+    // 须用户在 System Settings 显式 opt-in。
+    let browser_site_memory_default = read_bool_pref(&deps, PREF_BROWSER_SITE_MEMORY, false).await;
+    // Phase D: takeover/审批 gate LIVE 值。host_default=false（OFF）——人机接管 + 跨域 POST 审批
+    // 须用户在 System Settings 显式 opt-in（否则维持 fail-closed 硬挡）。
+    let browser_takeover_default = read_bool_pref(&deps, PREF_BROWSER_TAKEOVER, false).await;
+    // P7B: visual-fallback LIVE 值。host_default=false（OFF）——每次兜底都过一遍视觉模型，有额外 token
+    // 成本，须用户在 System Settings 显式 opt-in。
+    let browser_visual_fallback_default =
+        read_bool_pref(&deps, PREF_BROWSER_VISUAL_FALLBACK, false).await;
+    // 静默浏览器 LIVE 值（「浏览器模式」可见性维度）。host_default=**true**（产品默认静默）——
+    // 直接消除桌面弹窗困扰；用户可在 System Settings 关闭以弹出可见窗口。映射到 headless。
+    let browser_silent_default = read_bool_pref(&deps, PREF_BROWSER_SILENT, true).await;
+    // 浏览器来源 LIVE 值（与 silent 正交）。host_default="managed"（内置/下载 CfT）；"system" =
+    // 用户系统 Chrome/Edge 本体优先。红线不变：专属 user-data-dir 起独立托管实例。
+    let browser_source_default =
+        read_string_pref(&deps, PREF_BROWSER_SOURCE, BROWSER_SOURCE_DEFAULT).await;
+
+    let browser_use_enabled = overrides.browser_use.unwrap_or(browser_use_default);
+
+    // P3-X2: build the browser secret vault descriptor when browser-use is on.
+    // User decision (去 per-pet 键化): browser identity is GLOBALLY SHARED — the
+    // shared `nomifun_secret::pet_vault_path` now ignores its key and routes every
+    // caller to the one shared vault `{data_dir}/browser-secrets/shared`. We still
+    // compute the gateway `key_for`-shaped `pet_key` (kept for parity / so the call
+    // sites read identically), but it no longer scopes the vault — the *same* shared
+    // vault backs every companion + session, the gateway-driven browser, and the
+    // registration endpoint. The key is the machine-bound `encryption_key`. The
+    // native `BrowserTool` loads the store from this shared vault on first use →
+    // `secret:NAME` resolves (origin-gated) and the firewall `allow_etld1` is derived
+    // from the registered `allowed_origins` (裁决⑤), shared across all companions.
+    let browser_secret_vault = if browser_use_enabled {
+        // pet_key is no longer a routing key (the vault is shared); kept for parity
+        // with the gateway `key_for` convention and harmless since pet_vault_path
+        // ignores it.
+        let pet_key = match overrides.companion_id.as_deref() {
+            Some(c) if !c.trim().is_empty() => c.trim().to_string(),
+            _ if !ctx.conversation_id.trim().is_empty() => {
+                format!("conversation:{}", ctx.conversation_id.trim())
+            }
+            _ => "_default".to_string(),
+        };
+        Some(crate::types::BrowserSecretVault {
+            vault_path: nomifun_secret::pet_vault_path(&deps.data_dir, &pet_key),
+            key: deps.encryption_key,
+        })
+    } else {
+        None
+    };
+
+    let config = NomiResolvedConfig {
+        provider: fields.provider,
+        api_key: fields.api_key,
+        model: model_id,
+        base_url: fields.base_url,
+        system_prompt: overrides.system_prompt,
+        max_tokens: overrides.max_tokens,
+        max_turns: overrides.max_turns,
+        context_limit: fields.context_limit.map(|v| v as u64),
+        compat_overrides: fields.compat_overrides,
+        session_directory,
+        // 默认授权模式 = 全自动（yolo）。产品决策：所有 nomi 会话默认自动批准
+        // 标准工具类别（info/edit/exec/mcp —— 文件编辑 / Shell / 标准工具 & MCP），
+        // 不再反复弹授权框。理由：
+        //  - companion / IM channel master 本就无审批 UI（其首个 gateway/file/bash
+        //    工具调用会 park 在 rx.await，turn 永不 finish → 聊天永久「思考中」），
+        //    所以它们历来必须 yolo；现在把这一默认推广到普通桌面会话。
+        //  - **显式 `extra.session_mode` 仍胜出**：用户在权限选择器里手动降级为
+        //    `default` / `auto_edit` 会写偏好并经 extra 传入，这里的 `.or_else` 让显式值
+        //    优先，降级正常生效。
+        //  - 高危逃生舱（browser full-power 跨域 / takeover / 跨域 POST 审批 /
+        //    computer-use 桌面控制）各自读 `read_bool_pref`、**绝不看 session_mode**
+        //    （不变量⑧），与本默认正交、保持原状 —— yolo 不会放开它们。
+        session_mode: overrides
+            .session_mode
+            .clone()
+            .or_else(|| Some("yolo".to_owned())),
+        extra_mcp_servers,
+        bedrock_config: fields.bedrock_config,
+        computer_use: overrides.computer_use.unwrap_or(computer_use_default),
+        browser_use: browser_use_enabled,
+        // 静默浏览器 LIVE 值（产品默认 ON=headless；无 per-session override，纯全局开关）。
+        browser_silent: browser_silent_default,
+        // 浏览器来源 LIVE 值（默认 "managed"；"system"=系统 Chrome/Edge 本体优先）。
+        browser_source: browser_source_default,
+        // F1-sec: 全权模式 LIVE 值（无 per-session override，纯 client_preferences 全局开关）。
+        browser_full_power: browser_full_power_default,
+        // SD-6: 持久登录 LIVE 值（产品默认 ON，无 per-session override）。
+        browser_persistent_login: browser_persistent_login_default,
+        // P7A: site-memory LIVE 值（默认 OFF，opt-in；无 per-session override）。
+        browser_site_memory: browser_site_memory_default,
+        // Phase D: takeover/审批 gate LIVE 值（默认 OFF，opt-in；无 per-session override）。
+        browser_takeover: browser_takeover_default,
+        // P7B: visual-fallback LIVE 值（默认 OFF，opt-in；无 per-session override）。
+        browser_visual_fallback: browser_visual_fallback_default,
+        goal: overrides.goal.clone().map(|g| {
+            nomi_agent::goal::runtime::GoalSpec::new(
+                g.objective,
+                g.max_auto_continuations.unwrap_or(8),
+            )
+        }),
+        // P3-X2: per-pet secret vault descriptor (built above; None when browser-use off).
+        browser_secret_vault,
+        // Owning conversation instance identity — the nomi manager stamps it
+        // onto the session after build so a future reused id is rejected.
+        owner_token: owner_token.clone(),
+    };
+
+    let knowledge_kb_ids: Vec<String> = overrides
+        .knowledge_mounts
+        .iter()
+        .map(|m| m.id.clone())
+        .collect();
+
+    // Write-back ("回血") wiring for the native knowledge_write tool. The sink
+    // is passed only when the resolved policy permits writing (channel sessions
+    // resolve to Disabled → sink=None → tool not registered). `(id, name)` lets
+    // the tool resolve the base the model names back to the opaque id. The
+    // staged/direct decision was made above by the per-surface policy.
+    let knowledge_write_bases: Vec<(String, String)> = overrides
+        .knowledge_mounts
+        .iter()
+        .map(|m| (m.id.clone(), m.name.clone()))
+        .collect();
+    let knowledge_writeback_sink = if knowledge_write_enabled {
+        deps.knowledge_writeback.clone()
+    } else {
+        None
+    };
+
+    let knowledge_prelude: Option<String> = if overrides.knowledge_mounts.is_empty() {
+        None
+    } else {
+        let names: Vec<&str> = overrides
+            .knowledge_mounts
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        Some(format!(
+            "[Knowledge bases mounted: {}] Before answering, if this task relates to any of these, \
+             call the knowledge_search tool first and open the matching document. Do not rely on \
+             memory for topics these bases cover.",
+            names.join(", ")
+        ))
+    };
+
+    let conv_id_for_cron = ctx.conversation_id.clone();
+    let agent = NomiAgentManager::new(
+        ctx.conversation_id,
+        ctx.workspace,
+        config,
+        resume_session,
+        deps.requirement_sink.clone(),
+        if overrides.companion {
+            deps.companion_sink.clone()
+        } else {
+            None
+        },
+        deps.knowledge_retrieval.clone(),
+        knowledge_kb_ids,
+        knowledge_prelude,
+        knowledge_writeback_sink,
+        knowledge_write_bases,
+        knowledge_writeback_staged,
+        if overrides.companion {
+            deps.companion_skill_sink.clone()
+        } else {
+            None
+        },
+    )
+    .await?;
+    // Native cron tools: schedule/list/delete recurring prompts in this
+    // conversation. Registered only when the app wired a cron sink factory.
+    if let Some(make_sink) = deps.cron_sink_factory.as_ref() {
+        agent.register_cron_sink(make_sink(&conv_id_for_cron)).await;
+    }
+    Ok(AgentInstance::Nomi(Arc::new(agent)))
+}
+
+/// Host-level default for opt-in tool capabilities ("1"/"true" enables).
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// `client_preferences` keys for the System Settings capability toggles
+/// (written by the frontend via `configService`, read here per session).
+const PREF_COMPUTER_USE: &str = "agent.computerUse";
+const PREF_BROWSER_USE: &str = "agent.browserUse";
+/// **F1-sec**: browser-use evaluate「全权模式」开关（裁决⑨）。`true` → evaluate 放行（仍受与持久登录
+/// 互斥约束）；缺/`false` → evaluate 默认 OFF（最高危逃生舱 default-deny）。前端 System Settings 写。
+const PREF_BROWSER_FULL_POWER: &str = "agent.browserUse.fullPower";
+/// **SD-6**: browser-use 持久登录开关（裁决⑨ 互斥约束）。`true`（产品默认）→ 与全权互斥；`false` → 解除互斥。
+const PREF_BROWSER_PERSISTENT_LOGIN: &str = "agent.browserUse.persistentLogin";
+/// **P7A**: browser-use 站点记忆开关（opt-in，隐私相关）。`true` → 跨会话记住站点结构 + 注入 hints；
+/// 缺/`false`（host_default）→ OFF（不持久化、零行为变化）。前端 System Settings 写。
+const PREF_BROWSER_SITE_MEMORY: &str = "agent.browserUse.siteMemory";
+/// **Phase D**: browser-use 人机接管 + 跨域 POST 审批（opt-in，安全）。`true` → 注入审批 gate
+/// （不可逆动作 + 被门控出口浮给用户）；缺/`false`（host_default）→ OFF（fail-closed 硬挡）。前端 System Settings 写。
+const PREF_BROWSER_TAKEOVER: &str = "agent.browserUse.takeover";
+/// **P7B**: browser-use 视觉兜底点击（opt-in，有 token 成本）。`true` → DOM/aria 锚定失败时截图交视觉
+/// 模型定位再点；缺/`false`（host_default）→ OFF（不注入 locator、零行为变化）。前端 System Settings 写。
+const PREF_BROWSER_VISUAL_FALLBACK: &str = "agent.browserUse.visualFallback";
+/// **静默浏览器开关**（「浏览器模式」可见性维度）。`true`（**产品默认 ON**，host_default=true）→
+/// 引擎 headless（无可见窗口，解决弹窗困扰）；`false` → 弹出可见窗口。映射到 headless。前端写。
+const PREF_BROWSER_SILENT: &str = "agent.browserUse.silent";
+/// **浏览器来源**（「浏览器模式」来源维度，与 silent 正交）。`"managed"`（默认）= 内置/下载 CfT；
+/// `"system"` = 系统 Chrome/Edge 本体优先（未探到回退）。红线不变：专属 user-data-dir。前端写。
+const PREF_BROWSER_SOURCE: &str = "agent.browserUse.source";
+/// 浏览器来源 host default（无设置行/无 client_prefs 时）：内置/下载的 Chrome for Testing。
+const BROWSER_SOURCE_DEFAULT: &str = "managed";
+
+/// Read a boolean `client_preferences` toggle live, falling back to
+/// `host_default` when there is no setting row (fresh install) or no
+/// client_prefs repo is wired. The stored value is the bare JSON the frontend
+/// `configService` persists (`true`/`false`). Read per session so toggling the
+/// setting affects new sessions without a restart.
+async fn read_bool_pref(deps: &AgentFactoryDeps, key: &str, host_default: bool) -> bool {
+    let Some(repo) = deps.client_prefs.as_ref() else {
+        return host_default;
+    };
+    match repo.get_by_keys(&[key]).await {
+        Ok(rows) => rows
+            .into_iter()
+            .find(|r| r.key == key)
+            .map(|r| r.value.trim() == "true")
+            .unwrap_or(host_default),
+        Err(_) => host_default,
+    }
+}
+
+/// Read a string `client_preferences` value live, falling back to `host_default`
+/// when there is no setting row (fresh install), no client_prefs repo is wired, or
+/// the stored value is blank. Mirrors [`read_bool_pref`] for stringly settings
+/// (e.g. `agent.browserUse.source` = `"managed"`/`"system"`). Read per session so
+/// toggling the setting affects new sessions without a restart.
+async fn read_string_pref(deps: &AgentFactoryDeps, key: &str, host_default: &str) -> String {
+    let Some(repo) = deps.client_prefs.as_ref() else {
+        return host_default.to_owned();
+    };
+    match repo.get_by_keys(&[key]).await {
+        Ok(rows) => rows
+            .into_iter()
+            .find(|r| r.key == key)
+            .map(|r| r.value.trim().trim_matches('"').to_owned())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| host_default.to_owned()),
+        Err(_) => host_default.to_owned(),
+    }
+}
+
+/// App UI language default, used when no settings repo is wired (tests), no
+/// settings row is persisted yet (fresh install), or the read fails. Matches
+/// `SystemSettingsResponse::default().language` in `nomifun-api-types`.
+const DEFAULT_APP_LANGUAGE: &str = "en-US";
+
+/// Read the app UI language live from system settings (mirrors `read_bool_pref`).
+/// Falls back to [`DEFAULT_APP_LANGUAGE`] when the repo is absent, no row exists,
+/// the stored value is blank, or the read errors — so a companion always gets a
+/// well-formed directive. Takes the bare repo option (not the whole deps) so it
+/// is trivially unit-testable.
+async fn read_app_language(settings_repo: Option<&Arc<dyn ISettingsRepository>>) -> String {
+    let Some(repo) = settings_repo else {
+        return DEFAULT_APP_LANGUAGE.to_owned();
+    };
+    match repo.get_settings().await {
+        Ok(Some(settings)) if !settings.language.trim().is_empty() => settings.language,
+        _ => DEFAULT_APP_LANGUAGE.to_owned(),
+    }
+}
+
+/// Map a stored app-language code to the reply-language directive appended LAST
+/// to a companion-owned system prompt. Phrased as an explicit override so it wins
+/// over any earlier (possibly persisted) language line, while still letting the
+/// owner pull the companion into another language by writing in it. Unknown /
+/// empty / en-US all resolve to English (the app default); only the supported
+/// `zh-CN` selects Chinese (supported set lives in `nomifun-system`).
+fn reply_language_directive(lang: &str) -> &'static str {
+    match lang {
+        "zh-CN" => "【回复语言】无论上文的指令或记忆使用何种语言，都请始终用简体中文回复主人——\
+                    除非主人主动用其他语言和你说话，或明确要求你换一种语言。",
+        _ => "[Reply language] Regardless of the language used in the instructions or memories \
+              above, always reply to the owner in English — unless the owner writes to you in \
+              another language or explicitly asks you to switch.",
+    }
+}
+
+/// Append the knowledge-base section to the system prompt when the
+/// conversation service mounted bases into the workspace. Rendering is
+/// delegated to the shared builder
+/// (`nomifun_knowledge::context::build_knowledge_context`,
+/// `PromptSection` format) so nomi-engine sessions (companion companion threads
+/// included) see exactly the same knowledge context the ACP path gets via
+/// its preset_context — single source of truth, no more structural copies.
+fn append_knowledge_context(
+    base: Option<String>,
+    config: &NomiBuildExtra,
+    conversation_id: &str,
+    has_write_tool: bool,
+) -> Option<String> {
+    use nomifun_knowledge::context::{
+        KnowledgeContextFormat, KnowledgeContextOptions, build_knowledge_context,
+    };
+
+    let section = build_knowledge_context(
+        &config.knowledge_mounts,
+        &KnowledgeContextOptions {
+            format: KnowledgeContextFormat::PromptSection,
+            writeback: config.knowledge_writeback,
+            writeback_mode: config.knowledge_writeback_mode.as_deref(),
+            writeback_eagerness: config.knowledge_writeback_eagerness.as_deref(),
+            target_id: conversation_id,
+            has_search_tool: true,
+            // The nomi engine registers the native knowledge_write tool whenever
+            // the backend wired a write-back sink; the contract must then point
+            // the model at that tool, not the (unreachable) generic Write path.
+            has_write_tool,
+        },
+    );
+    match (base, section) {
+        (Some(ctx), Some(section)) => Some(format!("{ctx}\n\n{section}")),
+        (base, None) => base,
+        (None, section) => section,
+    }
+}
+
+/// Server-authored 编排主管 (orchestration lead) system prompt. Injected when a
+/// conversation carries `extra.orchestrator_role == "lead"` (会话 entry with
+/// "auto/range" models selected). The available-model range and working
+/// directory are supplied to the orchestration tools at runtime, so the prompt
+/// instructs the lead not to ask for them. Kept as a `const` so the composition
+/// is unit-testable without standing up the async factory.
+pub(crate) const LEAD_ORCHESTRATOR_PROMPT: &str = "你是 NomiFun 的编排主管。用户已在本会话限定可用模型范围（见运行上下文）。对简单或单步需求：直接作答。对复杂、可拆分为多个并行/有依赖子任务的需求：调用工具 `nomi_run_create(goal)` 把需求拆成任务 DAG 并行执行（模型范围与工作目录会自动取用），随后用 `nomi_run_status`/`nomi_run_result` 跟进并向用户汇报进展与产出。不要询问 workspace 或 fleet——它们已不存在。";
+
+/// Compose the 主管 system prompt onto whatever base prompt the assembly has
+/// produced (preset rules + companion persona + knowledge context), when the
+/// conversation is the orchestration lead.
+///
+/// - `role == Some("lead")`: prepend [`LEAD_ORCHESTRATOR_PROMPT`], then the base
+///   (if any) after a blank-line separator. Composition, NOT replacement — no
+///   preset/persona/knowledge content is discarded.
+/// - any other role (or `None`): return `base` unchanged (no 主管 injection).
+///
+/// Pure and side-effect-free so the lead path is testable in isolation.
+pub(crate) fn compose_lead_prompt(base: Option<String>, role: Option<&str>) -> Option<String> {
+    if role != Some("lead") {
+        return base;
+    }
+    Some(match base {
+        Some(existing) if !existing.is_empty() => {
+            format!("{LEAD_ORCHESTRATOR_PROMPT}\n\n{existing}")
+        }
+        _ => LEAD_ORCHESTRATOR_PROMPT.to_owned(),
+    })
+}
+
+/// Map Nomi DB platform name to the nomi provider identifier.
+///
+/// Mirrors the frontend `src/process/agent/nomi/envBuilder.ts` mapping.
+/// For `new-api` platform, per-model protocol overrides from `model_protocols`
+/// JSON take precedence.
+pub(crate) fn map_nomi_provider(
+    platform: &str,
+    model_id: &str,
+    model_protocols: Option<&str>,
+) -> String {
+    if platform == "new-api"
+        && let Some(protocols_json) = model_protocols
+        && let Ok(map) =
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(protocols_json)
+        && let Some(serde_json::Value::String(protocol)) = map.get(model_id)
+        && protocol == "anthropic"
+    {
+        return "anthropic".to_owned();
+    }
+
+    match platform {
+        "anthropic" => "anthropic",
+        "bedrock" => "bedrock",
+        "gemini-vertex-ai" => "vertex",
+        _ => "openai",
+    }
+    .to_owned()
+}
+
+/// Resolve base_url and compat overrides for the nomi provider.
+///
+/// Mirrors the frontend `envBuilder.ts` logic:
+/// - Strips trailing `/v1` from base_url (nomi appends its own path)
+/// - Gemini: prepends `/v1beta/openai` and overrides `api_path`
+/// - OpenAI official (`api.openai.com`): sets `max_completion_tokens`
+pub(crate) fn resolve_nomi_url_and_compat(
+    platform: &str,
+    raw_base_url: &str,
+    mapped_provider: &str,
+    is_full_url: bool,
+) -> (Option<String>, NomiCompatOverrides) {
+    let mut compat = NomiCompatOverrides::default();
+
+    if is_full_url {
+        let trimmed = raw_base_url.trim_end_matches('/');
+        compat.api_path = Some(String::new());
+        return (Some(trimmed.to_owned()), compat);
+    }
+
+    if platform == "gemini" {
+        let trimmed = raw_base_url.trim_end_matches('/');
+        let base = format!("{trimmed}/v1beta/openai");
+        compat.api_path = Some("/chat/completions".to_owned());
+        return (Some(base), compat);
+    }
+
+    let normalized = normalize_nomi_base_url(raw_base_url);
+    let base_url = Some(normalized).filter(|u| !u.is_empty());
+
+    if mapped_provider == "openai" && is_openai_host(raw_base_url) {
+        compat.max_tokens_field = Some("max_completion_tokens".to_owned());
+    }
+
+    (base_url, compat)
+}
+
+fn is_openai_host(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .map(|rest| rest == "api.openai.com" || rest.starts_with("api.openai.com/"))
+        .unwrap_or(false)
+}
+
+/// Strip trailing `/v1`, `/v1/`, or lone `/` from a base URL so that
+/// nomi can append its own path suffix (`/v1/messages`, `/v1/chat/completions`).
+fn normalize_nomi_base_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_owned()
+}
+
+pub(crate) fn resolve_bedrock_config(
+    json: Option<&str>,
+) -> Option<nomi_config::config::BedrockConfig> {
+    let bc: nomifun_api_types::BedrockConfig = serde_json::from_str(json?).ok()?;
+    Some(nomi_config::config::BedrockConfig {
+        region: Some(bc.region),
+        access_key_id: bc.access_key_id,
+        secret_access_key: bc.secret_access_key,
+        session_token: None,
+        profile: bc.profile,
+    })
+}
+
+async fn load_user_mcp_servers(
+    repo: &dyn IMcpServerRepository,
+    selected_ids: Option<&[String]>,
+    conversation_id: &str,
+) -> HashMap<String, McpServerConfig> {
+    // MCP server ids are i64 since the primary-key rework. The build-extra
+    // carries them as a JSON string array (written by the conversation
+    // service), so parse to i64 here; unparseable entries can never match a
+    // row and are dropped.
+    let selected_ids: Option<Vec<i64>> =
+        selected_ids.map(|ids| ids.iter().filter_map(|id| id.parse::<i64>().ok()).collect());
+    let rows_result = match selected_ids.as_deref() {
+        Some(ids) => repo.list_by_ids_any(ids).await,
+        None => repo.list().await,
+    };
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                conversation_id,
+                error = %err,
+                "user_mcp: list() failed; skipping injection"
+            );
+            return HashMap::new();
+        }
+    };
+
+    let mut servers = HashMap::new();
+    for row in rows {
+        let selected = selected_ids
+            .as_deref()
+            .map(|ids| ids.iter().any(|id| *id == row.id))
+            .unwrap_or(row.enabled);
+        if !selected || row.builtin {
+            continue;
+        }
+
+        match row_to_mcp_server_config(&row) {
+            Ok(config) => {
+                servers.insert(row.name.clone(), config);
+            }
+            Err(err) => {
+                warn!(
+                    conversation_id,
+                    server_id = %row.id,
+                    server_name = %row.name,
+                    error = %err,
+                    "user_mcp: failed to convert row; skipping"
+                );
+            }
+        }
+    }
+
+    servers
+}
+
+fn row_to_mcp_server_config(row: &McpServerRow) -> Result<McpServerConfig, String> {
+    let value: serde_json::Value = serde_json::from_str(&row.transport_config)
+        .map_err(|e| format!("invalid transport_config JSON: {e}"))?;
+
+    match row.transport_type.as_str() {
+        "stdio" => {
+            let command = value
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "stdio: missing command".to_owned())?;
+            let resolved_command = resolve_stdio_command(command);
+            let args = value
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let env = value
+                .get("env")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some(resolved_command),
+                args: Some(args),
+                env: Some(env),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            })
+        }
+        "http" | "streamable_http" => {
+            let url = value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "http: missing url".to_owned())?;
+            let headers = value
+                .get("headers")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.to_owned()),
+                headers: Some(headers),
+                deferred: Some(false),
+            })
+        }
+        "sse" => {
+            let url = value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "sse: missing url".to_owned())?;
+            let headers = value
+                .get("headers")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::Sse,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.to_owned()),
+                headers: Some(headers),
+                deferred: Some(false),
+            })
+        }
+        other => Err(format!("unsupported transport_type: {other}")),
+    }
+}
+
+fn session_server_to_mcp_server_config(
+    server: &SessionMcpServer,
+) -> Result<McpServerConfig, String> {
+    match &server.transport {
+        SessionMcpTransport::Stdio { command, args, env } => {
+            if command.is_empty() {
+                return Err("stdio: missing command".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some(resolve_stdio_command(command)),
+                args: Some(args.clone()),
+                env: Some(env.clone()),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::Http { url, headers } => {
+            if url.is_empty() {
+                return Err("http: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::Sse { url, headers } => {
+            if url.is_empty() {
+                return Err("sse: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::Sse,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::StreamableHttp { url, headers } => {
+            if url.is_empty() {
+                return Err("streamable_http: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+    }
+}
+
+fn merge_session_snapshot_mcp_servers(
+    extra_mcp_servers: &mut HashMap<String, McpServerConfig>,
+    session_mcp_servers: &[SessionMcpServer],
+    conversation_id: &str,
+) {
+    for server in session_mcp_servers {
+        match session_server_to_mcp_server_config(server) {
+            Ok(config) => {
+                if extra_mcp_servers
+                    .insert(server.name.clone(), config)
+                    .is_some()
+                {
+                    debug!(
+                        conversation_id = %conversation_id,
+                        server_name = %server.name,
+                        "session_mcp: session snapshot overrides repo-backed MCP config"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    conversation_id = %conversation_id,
+                    server_id = %server.id,
+                    server_name = %server.name,
+                    error = %err,
+                    "session_mcp: failed to convert session snapshot; skipping"
+                );
+            }
+        }
+    }
+}
+
+fn resolve_stdio_command(command: &str) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return command.to_owned();
+    }
+
+    let path = std::path::Path::new(trimmed);
+    if path.is_absolute()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return trimmed.to_owned();
+    }
+
+    resolve_command_path(trimmed)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed.to_owned())
+}
+
+fn resolve_mcp_servers(
+    overrides: &NomiBuildExtra,
+    conversation_id: &str,
+) -> HashMap<String, McpServerConfig> {
+    let mut servers = HashMap::new();
+    // The desktop gateway remains an explicit per-session capability for
+    // master-agent style sessions.
+    if overrides.desktop_gateway
+        && let Some(gw_cfg) = &overrides.gateway_mcp_config
+    {
+        servers.extend(gateway_mcp_to_config(gw_cfg, overrides, conversation_id));
+    }
+    servers
+}
+
+/// Desktop Gateway MCP stdio bridge config for the nomi engine, mirroring the
+/// ACP assembler's `gateway_mcp_server`. Caller conversation + user ids ride
+/// along for self-protection and data scoping; the companion binding (when present)
+/// rides along for attribution.
+fn gateway_mcp_to_config(
+    cfg: &GatewayMcpConfig,
+    overrides: &NomiBuildExtra,
+    conversation_id: &str,
+) -> HashMap<String, McpServerConfig> {
+    let mut env = HashMap::new();
+    env.insert(GatewayMcpConfig::ENV_PORT.into(), cfg.port.to_string());
+    env.insert(GatewayMcpConfig::ENV_TOKEN.into(), cfg.token.clone());
+    env.insert(
+        GatewayMcpConfig::ENV_CONVERSATION_ID.into(),
+        conversation_id.to_owned(),
+    );
+    env.insert(
+        GatewayMcpConfig::ENV_USER_ID.into(),
+        overrides.user_id.clone().unwrap_or_default(),
+    );
+    if let Some(companion_id) = overrides
+        .companion_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        env.insert(
+            GatewayMcpConfig::ENV_COMPANION_ID.into(),
+            companion_id.to_owned(),
+        );
+    }
+    if let Some(platform) = overrides
+        .channel_platform
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        env.insert(
+            GatewayMcpConfig::ENV_CHANNEL_PLATFORM.into(),
+            platform.to_owned(),
+        );
+    }
+    env.insert(
+        GatewayMcpConfig::ENV_PROFILE.into(),
+        GatewayMcpConfig::default_profile_for_session(overrides.channel_platform.as_deref()).into(),
+    );
+
+    let server = McpServerConfig {
+        transport: TransportType::Stdio,
+        command: Some(cfg.binary_path.clone()),
+        args: Some(vec!["mcp-gateway-stdio".into()]),
+        env: Some(env),
+        url: None,
+        headers: None,
+        deferred: Some(true),
+    };
+
+    HashMap::from([(GatewayMcpConfig::SERVER_NAME.to_owned(), server)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nomifun_api_types::GuideMcpConfig;
+
+    // ----- companion reply-language directive (the 用中文 bug fix) -----
+
+    /// Minimal mock settings repo for `read_app_language`: yields a fixed result
+    /// (`Err(())` simulates a DB read failure). Mirrors the McpServerRepo mock in
+    /// factory/acp.rs.
+    struct MockSettingsRepo(Result<Option<nomifun_db::models::SystemSettings>, ()>);
+
+    #[async_trait::async_trait]
+    impl ISettingsRepository for MockSettingsRepo {
+        async fn get_settings(
+            &self,
+        ) -> Result<Option<nomifun_db::models::SystemSettings>, nomifun_db::DbError> {
+            self.0
+                .clone()
+                .map_err(|_| nomifun_db::DbError::Init("simulated".into()))
+        }
+        async fn upsert_settings(
+            &self,
+            _language: &str,
+            _notification_enabled: bool,
+            _cron_notification_enabled: bool,
+            _command_queue_enabled: bool,
+            _save_upload_to_workspace: bool,
+        ) -> Result<nomifun_db::models::SystemSettings, nomifun_db::DbError> {
+            unimplemented!("not exercised by the language tests")
+        }
+    }
+
+    fn settings_row(language: &str) -> nomifun_db::models::SystemSettings {
+        nomifun_db::models::SystemSettings {
+            id: 1,
+            language: language.to_owned(),
+            notification_enabled: true,
+            cron_notification_enabled: false,
+            command_queue_enabled: false,
+            save_upload_to_workspace: false,
+            updated_at: 0,
+        }
+    }
+
+    fn settings_repo(
+        result: Result<Option<nomifun_db::models::SystemSettings>, ()>,
+    ) -> Arc<dyn ISettingsRepository> {
+        Arc::new(MockSettingsRepo(result))
+    }
+
+    #[test]
+    fn reply_language_directive_maps_supported_and_defaults_to_english() {
+        assert!(reply_language_directive("zh-CN").contains("简体中文"));
+        // en-US, unknown codes, and the empty string all resolve to English.
+        for lang in ["en-US", "fr-FR", "zh-TW", ""] {
+            let d = reply_language_directive(lang);
+            assert!(d.contains("in English"), "{lang} should map to English: {d}");
+            assert!(!d.contains("简体中文"), "{lang} must not select Chinese");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_app_language_falls_back_to_en_us() {
+        // No repo wired (tests / standalone composition).
+        assert_eq!(read_app_language(None).await, "en-US");
+        // No persisted row yet (fresh install).
+        assert_eq!(read_app_language(Some(&settings_repo(Ok(None)))).await, "en-US");
+        // Blank stored value.
+        assert_eq!(
+            read_app_language(Some(&settings_repo(Ok(Some(settings_row("   ")))))).await,
+            "en-US"
+        );
+        // Read error.
+        assert_eq!(read_app_language(Some(&settings_repo(Err(())))).await, "en-US");
+    }
+
+    #[tokio::test]
+    async fn read_app_language_returns_persisted_language() {
+        assert_eq!(
+            read_app_language(Some(&settings_repo(Ok(Some(settings_row("zh-CN")))))).await,
+            "zh-CN"
+        );
+        assert_eq!(
+            read_app_language(Some(&settings_repo(Ok(Some(settings_row("en-US")))))).await,
+            "en-US"
+        );
+    }
+
+    #[test]
+    fn resolve_mcp_servers_adds_gateway_when_flag_set() {
+        let overrides = NomiBuildExtra {
+            desktop_gateway: true,
+            gateway_mcp_config: Some(GatewayMcpConfig {
+                port: 41237,
+                token: "gw-tok".into(),
+                binary_path: "/usr/bin/nomicore".into(),
+            }),
+            user_id: Some("u1".into()),
+            companion_id: Some("companion_9".into()),
+            ..Default::default()
+        };
+        let servers = resolve_mcp_servers(&overrides, "conv-1");
+        let gw = servers
+            .get(GatewayMcpConfig::SERVER_NAME)
+            .expect("gateway server registered");
+        assert_eq!(
+            gw.args.as_deref(),
+            Some(&["mcp-gateway-stdio".to_owned()][..])
+        );
+        let env = gw.env.as_ref().expect("env set");
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_PORT).map(String::as_str),
+            Some("41237")
+        );
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_TOKEN).map(String::as_str),
+            Some("gw-tok")
+        );
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_CONVERSATION_ID)
+                .map(String::as_str),
+            Some("conv-1")
+        );
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_USER_ID).map(String::as_str),
+            Some("u1")
+        );
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_COMPANION_ID)
+                .map(String::as_str),
+            Some("companion_9")
+        );
+        assert_eq!(gw.deferred, Some(true));
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_PROFILE).map(String::as_str),
+            Some(GatewayMcpConfig::PROFILE_WORK)
+        );
+    }
+
+    #[test]
+    fn gateway_env_omits_companion_id_when_unbound() {
+        let overrides = NomiBuildExtra {
+            desktop_gateway: true,
+            gateway_mcp_config: Some(GatewayMcpConfig {
+                port: 41237,
+                token: "gw-tok".into(),
+                binary_path: "/usr/bin/nomicore".into(),
+            }),
+            user_id: Some("u1".into()),
+            companion_id: None,
+            ..Default::default()
+        };
+        let servers = resolve_mcp_servers(&overrides, "conv-1");
+        let env = servers[GatewayMcpConfig::SERVER_NAME].env.as_ref().unwrap();
+        assert!(
+            !env.contains_key(GatewayMcpConfig::ENV_COMPANION_ID),
+            "no binding → no env key (the stdio bridge treats absent and empty the same)"
+        );
+    }
+
+    #[test]
+    fn gateway_env_uses_lite_profile_for_channel_sessions() {
+        let overrides = NomiBuildExtra {
+            desktop_gateway: true,
+            gateway_mcp_config: Some(GatewayMcpConfig {
+                port: 41237,
+                token: "gw-tok".into(),
+                binary_path: "/usr/bin/nomicore".into(),
+            }),
+            channel_platform: Some("lark".into()),
+            ..Default::default()
+        };
+        let servers = resolve_mcp_servers(&overrides, "conv-1");
+        let env = servers[GatewayMcpConfig::SERVER_NAME].env.as_ref().unwrap();
+        assert_eq!(
+            env.get(GatewayMcpConfig::ENV_PROFILE).map(String::as_str),
+            Some(GatewayMcpConfig::PROFILE_LITE)
+        );
+    }
+
+    #[test]
+    fn resolve_mcp_servers_skips_gateway_without_flag() {
+        let overrides = NomiBuildExtra {
+            desktop_gateway: false,
+            gateway_mcp_config: Some(GatewayMcpConfig {
+                port: 41237,
+                token: "gw-tok".into(),
+                binary_path: "/usr/bin/nomicore".into(),
+            }),
+            ..Default::default()
+        };
+        let servers = resolve_mcp_servers(&overrides, "conv-1");
+        assert!(!servers.contains_key(GatewayMcpConfig::SERVER_NAME));
+    }
+
+    #[test]
+    fn normalize_nomi_base_url_strips_v1() {
+        assert_eq!(
+            normalize_nomi_base_url("https://api.openai.com/v1"),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            normalize_nomi_base_url("https://api.openai.com/v1/"),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            normalize_nomi_base_url("https://api.anthropic.com"),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            normalize_nomi_base_url("https://api.deepseek.com/"),
+            "https://api.deepseek.com"
+        );
+        assert_eq!(
+            normalize_nomi_base_url("http://localhost:11434"),
+            "http://localhost:11434"
+        );
+        assert_eq!(normalize_nomi_base_url(""), "");
+    }
+
+    #[test]
+    fn map_nomi_provider_known_platforms() {
+        assert_eq!(map_nomi_provider("anthropic", "m", None), "anthropic");
+        assert_eq!(map_nomi_provider("bedrock", "m", None), "bedrock");
+        assert_eq!(map_nomi_provider("gemini-vertex-ai", "m", None), "vertex");
+    }
+
+    #[test]
+    fn map_nomi_provider_custom_and_others_default_to_openai() {
+        assert_eq!(map_nomi_provider("custom", "gpt-4o", None), "openai");
+        assert_eq!(
+            map_nomi_provider("gemini", "gemini-2.5-pro", None),
+            "openai"
+        );
+        assert_eq!(map_nomi_provider("new-api", "m", None), "openai");
+        assert_eq!(map_nomi_provider("unknown", "m", None), "openai");
+    }
+
+    #[test]
+    fn map_nomi_provider_new_api_with_anthropic_protocol() {
+        let protocols = r#"{"claude-sonnet":"anthropic","gpt-4o":"openai"}"#;
+        assert_eq!(
+            map_nomi_provider("new-api", "claude-sonnet", Some(protocols)),
+            "anthropic"
+        );
+        assert_eq!(
+            map_nomi_provider("new-api", "gpt-4o", Some(protocols)),
+            "openai"
+        );
+        assert_eq!(
+            map_nomi_provider("new-api", "unknown-model", Some(protocols)),
+            "openai"
+        );
+    }
+
+    #[test]
+    fn map_nomi_provider_new_api_with_invalid_json() {
+        assert_eq!(
+            map_nomi_provider("new-api", "m", Some("not json")),
+            "openai"
+        );
+    }
+
+    #[test]
+    fn map_nomi_provider_non_new_api_ignores_protocols() {
+        let protocols = r#"{"m":"anthropic"}"#;
+        assert_eq!(map_nomi_provider("custom", "m", Some(protocols)), "openai");
+    }
+
+    #[test]
+    fn is_openai_host_detects_official_api() {
+        assert!(is_openai_host("https://api.openai.com/v1"));
+        assert!(is_openai_host("https://api.openai.com"));
+        assert!(is_openai_host("https://API.OPENAI.COM/v1"));
+        assert!(!is_openai_host("https://api.deepseek.com/v1"));
+        assert!(!is_openai_host("https://openai.example.com/v1"));
+        assert!(!is_openai_host(""));
+        assert!(!is_openai_host("not-a-url"));
+    }
+
+    #[test]
+    fn resolve_openai_official_sets_max_completion_tokens() {
+        let (base_url, compat) =
+            resolve_nomi_url_and_compat("custom", "https://api.openai.com/v1", "openai", false);
+        assert_eq!(base_url.as_deref(), Some("https://api.openai.com"));
+        assert_eq!(
+            compat.max_tokens_field.as_deref(),
+            Some("max_completion_tokens")
+        );
+        assert!(compat.api_path.is_none());
+    }
+
+    #[test]
+    fn resolve_non_openai_keeps_default_max_tokens() {
+        let (base_url, compat) =
+            resolve_nomi_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
+        assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
+        assert!(compat.max_tokens_field.is_none());
+    }
+
+    #[test]
+    fn resolve_gemini_prepends_path_and_sets_api_path() {
+        let (base_url, compat) = resolve_nomi_url_and_compat(
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            "openai",
+            false,
+        );
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://generativelanguage.googleapis.com/v1beta/openai")
+        );
+        assert_eq!(compat.api_path.as_deref(), Some("/chat/completions"));
+        assert!(compat.max_tokens_field.is_none());
+    }
+
+    #[test]
+    fn resolve_anthropic_no_compat_overrides() {
+        let (base_url, compat) = resolve_nomi_url_and_compat(
+            "anthropic",
+            "https://api.anthropic.com",
+            "anthropic",
+            false,
+        );
+        assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
+        assert!(compat.max_tokens_field.is_none());
+        assert!(compat.api_path.is_none());
+    }
+
+    #[test]
+    fn resolve_full_url_mode_uses_url_as_is() {
+        let (base_url, compat) = resolve_nomi_url_and_compat(
+            "custom",
+            "https://proxy.example.com/v1/chat/completions",
+            "openai",
+            true,
+        );
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://proxy.example.com/v1/chat/completions")
+        );
+        assert_eq!(compat.api_path.as_deref(), Some(""));
+        assert!(compat.max_tokens_field.is_none());
+    }
+
+    #[test]
+    fn resolve_full_url_mode_strips_trailing_slash() {
+        let (base_url, compat) = resolve_nomi_url_and_compat(
+            "custom",
+            "https://proxy.example.com/v1/chat/completions/",
+            "openai",
+            true,
+        );
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://proxy.example.com/v1/chat/completions")
+        );
+        assert_eq!(compat.api_path.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn resolve_full_url_false_still_normalizes() {
+        let (base_url, compat) =
+            resolve_nomi_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
+        assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
+        assert!(compat.api_path.is_none());
+    }
+
+    #[test]
+    fn resolve_mcp_servers_ignores_guide_configs() {
+        let overrides = NomiBuildExtra {
+            guide_mcp_config: Some(GuideMcpConfig {
+                port: 8000,
+                token: "guide-tok".into(),
+                binary_path: "/usr/bin/backend".into(),
+            }),
+            backend: Some("nomi".into()),
+            ..Default::default()
+        };
+
+        let result = resolve_mcp_servers(&overrides, "conv-1");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_mcp_servers_ignores_guide_for_solo_sessions() {
+        let overrides = NomiBuildExtra {
+            guide_mcp_config: Some(GuideMcpConfig {
+                port: 8000,
+                token: "guide-tok".into(),
+                binary_path: "/usr/bin/backend".into(),
+            }),
+            backend: Some("nomi".into()),
+            user_id: Some("user-1".into()),
+            ..Default::default()
+        };
+
+        let result = resolve_mcp_servers(&overrides, "conv-2");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_mcp_servers_empty_when_no_config() {
+        let overrides = NomiBuildExtra::default();
+        let result = resolve_mcp_servers(&overrides, "conv-3");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_mcp_servers_guide_skipped_for_unknown_backend() {
+        let overrides = NomiBuildExtra {
+            guide_mcp_config: Some(GuideMcpConfig {
+                port: 8000,
+                token: "tok".into(),
+                binary_path: "/bin/x".into(),
+            }),
+            backend: Some("unknown-vendor".into()),
+            ..Default::default()
+        };
+
+        let result = resolve_mcp_servers(&overrides, "conv-4");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_mcp_servers_guide_skipped_when_backend_none() {
+        let overrides = NomiBuildExtra {
+            guide_mcp_config: Some(GuideMcpConfig {
+                port: 8000,
+                token: "tok".into(),
+                binary_path: "/bin/x".into(),
+            }),
+            backend: None,
+            ..Default::default()
+        };
+
+        let result = resolve_mcp_servers(&overrides, "conv-5");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn session_snapshot_overrides_repo_backed_mcp_config() {
+        let mut servers = HashMap::from([(
+            "demo-mcp".to_owned(),
+            McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some("npx".into()),
+                args: Some(vec!["-y".into(), "@old/server".into()]),
+                env: Some(HashMap::new()),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            },
+        )]);
+
+        let snapshot = vec![SessionMcpServer {
+            id: "mcp_1".into(),
+            name: "demo-mcp".into(),
+            transport: SessionMcpTransport::Stdio {
+                command: "uvx".into(),
+                args: vec!["new-server".into()],
+                env: HashMap::from([("TOKEN".into(), "abc".into())]),
+            },
+        }];
+
+        merge_session_snapshot_mcp_servers(&mut servers, &snapshot, "conv-override");
+
+        let server = servers.get("demo-mcp").expect("snapshot should remain");
+        assert_eq!(server.transport, TransportType::Stdio);
+        // `resolve_command_path` may resolve to an absolute path; on Windows
+        // that includes the `.exe` extension.
+        let command = server
+            .command
+            .as_deref()
+            .expect("stdio command should exist");
+        let command = command.replace('\\', "/").to_lowercase();
+        assert!(
+            command == "uvx" || command.ends_with("/uvx") || command.ends_with("/uvx.exe"),
+            "unexpected stdio command path: {command}",
+        );
+        assert_eq!(server.args.as_deref(), Some(&["new-server".to_owned()][..]));
+        assert_eq!(
+            server.env.as_ref().and_then(|env| env.get("TOKEN")),
+            Some(&"abc".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_bedrock_config_access_key() {
+        let json = r#"{"auth_method":"accessKey","region":"us-west-2","access_key_id":"AKIA123","secret_access_key":"secret456"}"#;
+        let result = resolve_bedrock_config(Some(json)).unwrap();
+        assert_eq!(result.region.as_deref(), Some("us-west-2"));
+        assert_eq!(result.access_key_id.as_deref(), Some("AKIA123"));
+        assert_eq!(result.secret_access_key.as_deref(), Some("secret456"));
+        assert!(result.profile.is_none());
+        assert!(result.session_token.is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_profile() {
+        let json = r#"{"auth_method":"profile","region":"eu-west-1","profile":"my-profile"}"#;
+        let result = resolve_bedrock_config(Some(json)).unwrap();
+        assert_eq!(result.region.as_deref(), Some("eu-west-1"));
+        assert_eq!(result.profile.as_deref(), Some("my-profile"));
+        assert!(result.access_key_id.is_none());
+        assert!(result.secret_access_key.is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_none_when_json_missing() {
+        assert!(resolve_bedrock_config(None).is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_none_when_json_invalid() {
+        assert!(resolve_bedrock_config(Some("not-json")).is_none());
+    }
+
+    #[test]
+    fn preset_rules_merged_into_system_prompt_when_no_existing() {
+        let json = serde_json::json!({
+            "preset_rules": "You are a data analyst. Always use Python.",
+        });
+        let mut overrides: NomiBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(
+            overrides.system_prompt.as_deref(),
+            Some("You are a data analyst. Always use Python.")
+        );
+        assert!(overrides.preset_rules.is_none());
+    }
+
+    #[test]
+    fn preset_rules_appended_to_existing_system_prompt() {
+        let json = serde_json::json!({
+            "system_prompt": "Be concise.",
+            "preset_rules": "You are a data analyst.",
+        });
+        let mut overrides: NomiBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(
+            overrides.system_prompt.as_deref(),
+            Some("Be concise.\n\nYou are a data analyst.")
+        );
+    }
+
+    #[test]
+    fn no_preset_rules_leaves_system_prompt_unchanged() {
+        let json = serde_json::json!({
+            "system_prompt": "Be concise.",
+        });
+        let mut overrides: NomiBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(overrides.system_prompt.as_deref(), Some("Be concise."));
+    }
+
+    #[test]
+    fn compose_lead_prompt_prepends_supervisor_prompt_for_lead() {
+        // lead role → 主管 prompt is prepended and composed with the existing
+        // base (preset/persona/knowledge), not discarded.
+        let composed =
+            compose_lead_prompt(Some("Be concise.".to_owned()), Some("lead")).expect("some prompt");
+        assert!(
+            composed.contains("编排主管"),
+            "lead prompt must carry the distinctive 主管 marker: {composed}"
+        );
+        assert!(
+            composed.contains("nomi_run_create"),
+            "lead prompt must name the orchestration tool: {composed}"
+        );
+        // Composition, not replacement: the provided base survives.
+        assert!(
+            composed.contains("Be concise."),
+            "existing base prompt must be preserved: {composed}"
+        );
+        // The 主管 prompt comes first, then the base after a separator.
+        let idx_lead = composed.find("编排主管").unwrap();
+        let idx_base = composed.find("Be concise.").unwrap();
+        assert!(idx_lead < idx_base, "主管 prompt must precede the base");
+    }
+
+    #[test]
+    fn compose_lead_prompt_with_no_base_is_just_supervisor_prompt() {
+        let composed = compose_lead_prompt(None, Some("lead")).expect("some prompt");
+        assert!(composed.contains("编排主管"));
+        assert_eq!(composed, LEAD_ORCHESTRATOR_PROMPT);
+    }
+
+    #[test]
+    fn compose_lead_prompt_non_lead_is_passthrough() {
+        // Non-lead role (None / other) returns the base verbatim — no 主管 prompt.
+        assert_eq!(
+            compose_lead_prompt(Some("Be concise.".to_owned()), None),
+            Some("Be concise.".to_owned())
+        );
+        let other = compose_lead_prompt(Some("Be concise.".to_owned()), Some("member"));
+        assert_eq!(other.as_deref(), Some("Be concise."));
+        assert!(
+            !other.unwrap().contains("编排主管"),
+            "non-lead must NOT carry the 主管 prompt"
+        );
+        // Non-lead with no base stays None (no injection).
+        assert_eq!(compose_lead_prompt(None, None), None);
+        assert_eq!(compose_lead_prompt(None, Some("member")), None);
+    }
+
+    #[test]
+    fn append_knowledge_context_without_mounts_is_passthrough() {
+        let config = NomiBuildExtra::default();
+        assert_eq!(
+            append_knowledge_context(None, &config, "conv-1", true),
+            None
+        );
+        assert_eq!(
+            append_knowledge_context(Some("hello".into()), &config, "conv-1", true),
+            Some("hello".into())
+        );
+    }
+
+    #[test]
+    fn append_knowledge_context_renders_mounts_and_writeback() {
+        use nomifun_api_types::KnowledgeMountInfo;
+
+        let mut config = NomiBuildExtra {
+            knowledge_mounts: vec![KnowledgeMountInfo {
+                id: "kb1".into(),
+                name: "领域知识".into(),
+                description: "domain docs".into(),
+                rel_path: ".nomi/knowledge/领域知识".into(),
+                toc: vec!["intro.md — 简介".into()],
+                summary: Some("Covers deployment flows and runbooks.".into()),
+                live_sources: vec![],
+            }],
+            knowledge_writeback: false,
+            ..Default::default()
+        };
+
+        let readonly =
+            append_knowledge_context(Some("base".into()), &config, "conv-1", true).unwrap();
+        assert!(readonly.starts_with("base\n\n"));
+        assert!(readonly.contains("## Knowledge bases"));
+        assert!(readonly.contains("领域知识"));
+        assert!(readonly.contains("intro.md — 简介"));
+        assert!(readonly.contains("READ-ONLY"));
+        // Hit-rate contract: retrieval protocol (once), per-base summary and
+        // when-to-consult guidance — same shared builder as the ACP path.
+        assert_eq!(readonly.matches("Retrieval protocol").count(), 1);
+        assert!(readonly.contains("Covers deployment flows and runbooks."));
+        assert!(readonly.contains("When to consult"));
+
+        // nomi surface has the native tool → write-back contract points at it,
+        // and the staged inbox path stays internal (not advertised to the model).
+        config.knowledge_writeback = true;
+        let staged = append_knowledge_context(None, &config, "conv-1", true).unwrap();
+        assert!(staged.contains("STAGED mode"));
+        assert!(staged.contains("knowledge_write"));
+        assert!(
+            !staged.contains("_inbox/conv-1/"),
+            "tool contract must not leak the inbox path: {staged}"
+        );
+        // Flag plumbs through: without the tool, the file-based prose returns.
+        let staged_files = append_knowledge_context(None, &config, "conv-1", false).unwrap();
+        assert!(staged_files.contains("_inbox/conv-1/"));
+        assert!(!staged_files.contains("knowledge_write"));
+
+        config.knowledge_writeback_mode = Some("direct".into());
+        let direct = append_knowledge_context(None, &config, "conv-1", true).unwrap();
+        assert!(direct.contains("DIRECT mode"));
+        assert!(direct.contains("knowledge_write"));
+        assert!(!direct.contains("_inbox/"));
+        // Disposition (回写意识) threads from build-extra → contract.
+        assert!(direct.contains("Disposition — CONSERVATIVE"));
+        config.knowledge_writeback_eagerness = Some("aggressive".into());
+        let eager = append_knowledge_context(None, &config, "conv-1", true).unwrap();
+        assert!(eager.contains("Disposition — AGGRESSIVE"));
+    }
+
+    #[test]
+    fn knowledge_fields_deserialize_from_extra_and_reach_prompt() {
+        // The conversation service writes snake_case keys into build-extra
+        // JSON; the nomi build path must surface them in the system prompt.
+        let json = serde_json::json!({
+            "knowledge_mounts": [{
+                "id": "kb1",
+                "name": "运维手册",
+                "description": "",
+                "rel_path": ".nomi/knowledge/运维手册",
+                "toc": ["deploy.md — 部署"],
+            }],
+            "knowledge_writeback": true,
+            "knowledge_writeback_mode": "staged",
+            "knowledge_writeback_eagerness": "aggressive",
+        });
+        let overrides: NomiBuildExtra = serde_json::from_value(json).unwrap();
+        assert_eq!(overrides.knowledge_mounts.len(), 1);
+        assert!(overrides.knowledge_writeback);
+        assert_eq!(
+            overrides.knowledge_writeback_mode.as_deref(),
+            Some("staged")
+        );
+        assert_eq!(
+            overrides.knowledge_writeback_eagerness.as_deref(),
+            Some("aggressive")
+        );
+
+        let prompt = append_knowledge_context(None, &overrides, "conv-x", true).unwrap();
+        assert!(prompt.contains("Knowledge bases"));
+        assert!(prompt.contains("运维手册"));
+        assert!(prompt.contains("knowledge_write"));
+        // The disposition keyword threads all the way from extra JSON to prompt.
+        assert!(prompt.contains("Disposition — AGGRESSIVE"));
+        // Legacy extra (no summary/live_sources) must keep deserializing and
+        // still get the upgraded retrieval contract.
+        assert!(prompt.contains("When to consult"));
+    }
+
+    #[test]
+    fn channel_write_opt_in_threads_from_extra_into_write_policy() {
+        // Regression: the `channel_write_enabled` opt-in must survive the
+        // build-extra round-trip so the nomi factory can resolve the
+        // external-IM-channel write policy. Before the fix this field was never
+        // threaded, so the reconstructed binding defaulted it to false and
+        // channel write-back was permanently Disabled on the nomi engine.
+        use nomifun_knowledge::{resolve_write_policy, KnowledgeBinding, WriteMode, WriteSurface};
+
+        // Absent in JSON → serde default false (the previous, broken behavior).
+        let off: NomiBuildExtra = serde_json::from_value(serde_json::json!({
+            "knowledge_writeback": true,
+        }))
+        .unwrap();
+        assert!(!off.knowledge_channel_write_enabled);
+
+        // Present and true → carried through.
+        let on: NomiBuildExtra = serde_json::from_value(serde_json::json!({
+            "knowledge_writeback": true,
+            "knowledge_channel_write_enabled": true,
+        }))
+        .unwrap();
+        assert!(on.knowledge_channel_write_enabled);
+
+        // Reconstruct the binding exactly as build_nomi does and confirm the
+        // policy flips from Disabled to Staged for an external channel.
+        let reconstruct = |extra: &NomiBuildExtra| KnowledgeBinding {
+            enabled: true,
+            writeback: extra.knowledge_writeback,
+            writeback_mode: extra
+                .knowledge_writeback_mode
+                .clone()
+                .unwrap_or_else(|| "staged".to_owned()),
+            channel_write_enabled: extra.knowledge_channel_write_enabled,
+            ..Default::default()
+        };
+
+        let disabled =
+            resolve_write_policy(WriteSurface::ExternalChannel, &reconstruct(&off), "conv-c");
+        assert!(matches!(disabled.mode, WriteMode::Disabled));
+
+        let staged =
+            resolve_write_policy(WriteSurface::ExternalChannel, &reconstruct(&on), "conv-c");
+        assert!(matches!(staged.mode, WriteMode::Staged { .. }));
+    }
+}

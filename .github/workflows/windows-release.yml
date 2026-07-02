@@ -1,0 +1,126 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without leading v"
+        required: true
+        default: "0.1.0"
+      notes:
+        description: "GitHub Release notes and updater notes"
+        required: false
+        default: "HangCore Agent v0.1.0 Windows first release."
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    name: Build and publish Windows x64
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      HANGCORE_REPO: Alvinzero/HangCore-Agent
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply release version
+        run: bun run bump ${{ inputs.version }}
+
+      - name: Typecheck UI
+        run: bun run typecheck
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
+      - name: Validate updater signing secret
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "Missing TAURI_SIGNING_PRIVATE_KEY repository secret. Add the contents of apps/desktop/signing/hangcore-updater.key before publishing."
+          }
+
+      - name: Build Windows updater installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run build:win x64 --config apps/desktop/tauri.updater.conf.json
+
+      - name: Generate latest.json
+        shell: pwsh
+        env:
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: |
+          $notesPath = Join-Path $env:RUNNER_TEMP "hangcore-release-notes.md"
+          Set-Content -Path $notesPath -Value $env:RELEASE_NOTES -Encoding UTF8
+          bun scripts/make-latest-json.mjs --repo $env:HANGCORE_REPO --notes-file $notesPath --collect
+
+          $manifest = Get-Content apps/desktop/updater/latest.json -Raw | ConvertFrom-Json
+          if ($manifest.version -ne "${{ inputs.version }}") {
+            throw "latest.json version $($manifest.version) does not match ${{ inputs.version }}"
+          }
+          if (-not $manifest.platforms.'windows-x86_64') {
+            throw "latest.json is missing platforms.windows-x86_64"
+          }
+          if ($manifest.platforms.'windows-x86_64'.url -notlike "*Alvinzero/HangCore-Agent*") {
+            throw "latest.json Windows URL does not point to Alvinzero/HangCore-Agent"
+          }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hangcore-agent-windows-x64-${{ inputs.version }}
+          path: |
+            dist/desktop/*.exe
+            dist/desktop/*.sig
+            dist/desktop/latest.json
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: |
+          $tag = "v${{ inputs.version }}"
+          $notesPath = Join-Path $env:RUNNER_TEMP "hangcore-release-notes.md"
+          Set-Content -Path $notesPath -Value $env:RELEASE_NOTES -Encoding UTF8
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f $tag
+          git push origin $tag --force
+
+          $assets = Get-ChildItem dist/desktop -File |
+            Where-Object { $_.Name -like "*.exe" -or $_.Name -like "*.sig" -or $_.Name -eq "latest.json" } |
+            ForEach-Object { $_.FullName }
+          if (-not $assets -or $assets.Count -lt 3) {
+            throw "Expected Windows exe, .sig, and latest.json assets in dist/desktop"
+          }
+
+          gh release view $tag --repo $env:HANGCORE_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag --repo $env:HANGCORE_REPO @assets --clobber
+            gh release edit $tag --repo $env:HANGCORE_REPO --title $tag --notes-file $notesPath
+          } else {
+            gh release create $tag --repo $env:HANGCORE_REPO @assets --title $tag --notes-file $notesPath
+          }

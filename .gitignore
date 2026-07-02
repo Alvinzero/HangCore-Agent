@@ -1,0 +1,60 @@
+# Rust
+/target/
+**/target/
+/build.noindex/
+Cargo.lock.bak
+
+# Packaging / runtime artifacts
+/dist/
+# Legacy dev data dirs from before all hosts shared one per-user default
+# (%LOCALAPPDATA%\NomiFun\Nomi etc.) — kept so stale checkouts don't commit them.
+/data/
+/data-verify/
+/.dev-data/
+# Per-crate runtime data (app state written at runtime, e.g. extension-states.json)
+crates/backend/nomifun-app/data/
+
+# Node / Bun
+node_modules/
+**/node_modules/
+ui/dist/
+.bun/
+*.tsbuildinfo
+
+# Tauri
+apps/desktop/gen/
+apps/desktop/target/
+
+# Tauri updater signing keys — NEVER commit private keys
+apps/desktop/.tauri/
+*.key
+# The matching public key lives in tauri.conf.json (plugins.updater.pubkey);
+# keep the local .pub copy out of git to avoid a stray untracked file.
+*.key.pub
+
+# macOS code signing / notarization secrets — NEVER commit
+apps/desktop/signing/.env.signing
+
+# Release upload token for `bun run release:win` — NEVER commit (holds a GitHub PAT).
+# The .example alongside it is safe to track.
+apps/desktop/signing/.env.release
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Claude Code 会话产物（临时 worktree、本地设置），不入库
+.claude/
+
+# Visual brainstorming companion (transient mockups)
+.superpowers/

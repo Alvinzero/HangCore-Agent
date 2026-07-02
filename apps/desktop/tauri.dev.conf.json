@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HangCore Agent Dev",
+  "identifier": "com.hangshun.hangcoreagent.dev",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["hangcore-dev"]
+      }
+    },
+    "updater": {
+      "endpoints": [
+        "http://127.0.0.1:59999/hangcore-dev-channel-has-no-update-feed/latest.json"
+      ]
+    }
+  }
+}
