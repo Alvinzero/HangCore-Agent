@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.0"
+        default: "0.1.1"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.0 Windows first release."
+        default: "HangCore Agent v0.1.1 adds the Kun Agent registration placeholder for the future kun-acp-adapter local ACP workflow."
 
 permissions:
   contents: write
