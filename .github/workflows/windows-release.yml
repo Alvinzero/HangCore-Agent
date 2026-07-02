@@ -11,6 +11,9 @@ on:
         description: "GitHub Release notes and updater notes"
         required: false
         default: "HangCore Agent v0.1.2 fixes the Kun Agent manual install entry and adds the kun-acp-adapter MVP, which bridges NomiFun ACP stdio sessions to a running local Kun HTTP/SSE loop."
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -26,6 +29,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: release
+        shell: pwsh
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DISPATCH_NOTES: ${{ inputs.notes }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ($env:EVENT_NAME -eq "workflow_dispatch") {
+            $version = $env:DISPATCH_VERSION
+            $notes = $env:DISPATCH_NOTES
+          } else {
+            $tag = $env:REF_NAME
+            $version = $tag -replace '^v', ''
+            $notes = git tag -l $tag --format='%(contents)'
+            if (-not $notes) {
+              $notes = git log -1 --pretty=%B
+            }
+          }
+
+          $notesPath = Join-Path $env:RUNNER_TEMP "hangcore-release-notes.md"
+          Set-Content -Path $notesPath -Value $notes.Trim() -Encoding UTF8
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -41,7 +72,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Apply release version
-        run: bun run bump ${{ inputs.version }}
+        run: bun run bump ${{ steps.release.outputs.version }}
 
       - name: Typecheck UI
         run: bun run typecheck
@@ -71,15 +102,13 @@ jobs:
       - name: Generate latest.json
         shell: pwsh
         env:
-          RELEASE_NOTES: ${{ inputs.notes }}
+          RELEASE_NOTES_FILE: ${{ steps.release.outputs.notes_path }}
         run: |
-          $notesPath = Join-Path $env:RUNNER_TEMP "hangcore-release-notes.md"
-          Set-Content -Path $notesPath -Value $env:RELEASE_NOTES -Encoding UTF8
-          bun scripts/make-latest-json.mjs --repo $env:HANGCORE_REPO --notes-file $notesPath --collect
+          bun scripts/make-latest-json.mjs --repo $env:HANGCORE_REPO --notes-file $env:RELEASE_NOTES_FILE --collect
 
           $manifest = Get-Content apps/desktop/updater/latest.json -Raw | ConvertFrom-Json
-          if ($manifest.version -ne "${{ inputs.version }}") {
-            throw "latest.json version $($manifest.version) does not match ${{ inputs.version }}"
+          if ($manifest.version -ne "${{ steps.release.outputs.version }}") {
+            throw "latest.json version $($manifest.version) does not match ${{ steps.release.outputs.version }}"
           }
           if (-not $manifest.platforms.'windows-x86_64') {
             throw "latest.json is missing platforms.windows-x86_64"
@@ -100,7 +129,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hangcore-agent-windows-x64-${{ inputs.version }}
+          name: hangcore-agent-windows-x64-${{ steps.release.outputs.version }}
           path: |
             dist/desktop/*.exe
             dist/desktop/*.sig
@@ -111,16 +140,17 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_NOTES: ${{ inputs.notes }}
+          RELEASE_NOTES_FILE: ${{ steps.release.outputs.notes_path }}
         run: |
-          $tag = "v${{ inputs.version }}"
-          $notesPath = Join-Path $env:RUNNER_TEMP "hangcore-release-notes.md"
-          Set-Content -Path $notesPath -Value $env:RELEASE_NOTES -Encoding UTF8
+          $tag = "v${{ steps.release.outputs.version }}"
+          $notesPath = $env:RELEASE_NOTES_FILE
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f $tag
-          git push origin $tag --force
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            git tag -f $tag
+            git push origin $tag --force
+          }
 
           $assets = Get-ChildItem dist/desktop -File |
             Where-Object { $_.Name -like "*.exe" -or $_.Name -like "*.sig" -or $_.Name -eq "latest.json" } |
