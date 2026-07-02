@@ -46,6 +46,9 @@ jobs:
       - name: Typecheck UI
         run: bun run typecheck
 
+      - name: Build UI dist for Tauri checks
+        run: bun run build:ui
+
       - name: Check Rust workspace
         run: cargo check --workspace
 
