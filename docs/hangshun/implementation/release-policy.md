@@ -77,7 +77,7 @@
 | `v0.1.2` | Kun Agent 安装入口修正 + `kun-acp-adapter` MVP | 本轮模块发布 | Kun Agent 手动下载入口改为项目内安装说明；新增 HangCore 自有 ACP stdio adapter，桥接 NomiFun Local Agents 到本机 Kun HTTP/SSE agent loop。 |
 | `v0.1.3` | Skills 中文友好显示与搜索 | 已并入后续发布 | Guid 抽屉和 Skills Hub 中内置 Skills 名称、描述、标签中文化，运行时 Skill id 保持不变。 |
 | `v0.1.4` | Kun Agent 模型服务商复用与 provider fallback | 用户手动发布 | Kun Agent 复用系统设置里的第三方模型服务商配置；Kun runtime / 命令不可用时可走注入 provider fallback。 |
-| `v0.1.5` | 真实 Kun runtime 对话链路闭环 | 本轮候选发布 | `kun-acp-adapter` 使用 Kun 原 HTTP/SSE runtime 和 AgentLoop，补齐 ACP permission、Kun approval/user-input 回填、tool lifecycle 映射和 adapter 设计文档。 |
+| `v0.1.5` | 真实 Kun runtime 对话链路闭环 | 已发布 | `kun-acp-adapter` 使用 Kun 原 HTTP/SSE runtime 和 AgentLoop，补齐 ACP permission、Kun approval/user-input 回填、tool lifecycle 映射和 adapter 设计文档；Release 含 Windows `.exe`、`.sig`、`latest.json`。 |
 
 ## 6. 下一版本候选
 
