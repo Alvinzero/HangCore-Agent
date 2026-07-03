@@ -21,6 +21,7 @@ import { useAssistantTags } from '@/renderer/hooks/assistant';
 import AssistantTagFilterBar from '@/renderer/pages/settings/AssistantSettings/AssistantTagFilterBar';
 import { filterAssistantsByTags } from '@/renderer/pages/settings/AssistantSettings/assistantUtils';
 import { filterSkillsByTags } from '@/renderer/pages/settings/skill/skillFilter';
+import { getSkillSearchText } from '@/renderer/pages/settings/skill/skillPresentation';
 import coworkSvg from '@/renderer/assets/icons/cowork.svg';
 import DrawerAssistantCard from './DrawerAssistantCard';
 import DrawerSkillCard from './DrawerSkillCard';
@@ -76,7 +77,7 @@ const SummonDrawer: React.FC<SummonDrawerProps> = ({
   onToggleSkill,
 }) => {
   const { t } = useTranslation();
-  const { audienceTags, scenarioTags } = useAssistantTags();
+  const { audienceTags, scenarioTags, tagByKey } = useAssistantTags();
 
   // ── Responsive width ──
   const [drawerWidth, setDrawerWidth] = useState(computeDrawerWidth);
@@ -130,8 +131,11 @@ const SummonDrawer: React.FC<SummonDrawerProps> = ({
   );
 
   const filteredSkills = useMemo(
-    () => filterSkillsByTags(skillInfos, query, tagFilter as SkillTagFilterState),
-    [skillInfos, query, tagFilter]
+    () =>
+      filterSkillsByTags(skillInfos, query, tagFilter as SkillTagFilterState, (skill) =>
+        getSkillSearchText(skill, tagByKey, localeKey)
+      ),
+    [skillInfos, query, tagFilter, tagByKey, localeKey]
   );
 
   // ── Skill checked state helpers ──
@@ -279,6 +283,8 @@ const SummonDrawer: React.FC<SummonDrawerProps> = ({
                   skill={skill}
                   checked={isSkillChecked(skill.name)}
                   isAuto={builtinAutoNames.has(skill.name)}
+                  tagByKey={tagByKey}
+                  localeKey={localeKey}
                   onToggle={onToggleSkill}
                 />
               ))}

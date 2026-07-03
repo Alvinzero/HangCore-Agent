@@ -8,18 +8,20 @@ import type { SkillInfo } from '@/renderer/pages/settings/AssistantSettings/type
 
 /** Selected tag keys per dimension. Empty array = no constraint on that dimension. */
 export type SkillTagFilterState = { audience: string[]; scenario: string[] };
+export type SkillSearchTextResolver = (skill: SkillInfo) => string;
 
 export const filterSkillsByTags = (
   skills: SkillInfo[],
   query: string,
-  tagFilter: SkillTagFilterState
+  tagFilter: SkillTagFilterState,
+  searchTextResolver?: SkillSearchTextResolver
 ): SkillInfo[] => {
   const q = query.trim().toLowerCase();
   const matchesFacet = (have: string[] | undefined, selected: string[]) =>
     selected.length === 0 || (have ?? []).some((k) => selected.includes(k));
   return skills.filter((s) => {
     if (q) {
-      const text = `${s.name} ${s.description ?? ''}`.toLowerCase();
+      const text = (searchTextResolver?.(s) ?? `${s.name} ${s.description ?? ''}`).toLowerCase();
       if (!text.includes(q)) return false;
     }
     return matchesFacet(s.audience_tags, tagFilter.audience) && matchesFacet(s.scenario_tags, tagFilter.scenario);

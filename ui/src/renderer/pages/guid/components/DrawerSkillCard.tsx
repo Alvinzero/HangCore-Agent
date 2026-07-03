@@ -4,26 +4,32 @@
  * tag chips, and a right-side checkbox.
  */
 import type { SkillInfo } from '@/renderer/pages/settings/AssistantSettings/types';
+import type { AssistantTag } from '@/common/types/agent/assistantTypes';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckSmall } from '@icon-park/react';
+import { getSkillDisplayDescription, getSkillDisplayName, getSkillTagLabel } from '@/renderer/pages/settings/skill/skillPresentation';
 import styles from '../index.module.css';
 
 export type DrawerSkillCardProps = {
   skill: SkillInfo;
   checked: boolean;
   isAuto: boolean;
+  tagByKey: Map<string, AssistantTag>;
+  localeKey: string;
   onToggle: (name: string, isAuto: boolean) => void;
 };
 
-const DrawerSkillCard: React.FC<DrawerSkillCardProps> = ({ skill, checked, isAuto, onToggle }) => {
+const DrawerSkillCard: React.FC<DrawerSkillCardProps> = ({ skill, checked, isAuto, tagByKey, localeKey, onToggle }) => {
   const { t } = useTranslation();
+  const displayName = getSkillDisplayName(skill, localeKey);
+  const displayDescription = getSkillDisplayDescription(skill, localeKey);
 
   // Generate initials from skill name (first 2 uppercase chars)
-  const initials = skill.name
+  const initials = displayName
     .replace(/[^a-zA-Z]/g, '')
     .slice(0, 2)
-    .toUpperCase() || skill.name.slice(0, 2).toUpperCase();
+    .toUpperCase() || displayName.slice(0, 2).toUpperCase();
 
   const sourceLabel = skill.is_custom
     ? t('guid.drawer.sourceCustom', { defaultValue: '自定义' })
@@ -66,7 +72,9 @@ const DrawerSkillCard: React.FC<DrawerSkillCardProps> = ({ skill, checked, isAut
       {/* Body */}
       <div className={styles.drawerCardBody}>
         <div className={styles.drawerCardTitleRow}>
-          <h4 className={styles.drawerCardTitle}>{skill.name}</h4>
+          <h4 className={styles.drawerCardTitle} title={displayName === skill.name ? undefined : skill.name}>
+            {displayName}
+          </h4>
           <span className={[styles.drawerBadge, styles.drawerBadgeMuted].join(' ')}>
             {sourceLabel}
           </span>
@@ -77,19 +85,19 @@ const DrawerSkillCard: React.FC<DrawerSkillCardProps> = ({ skill, checked, isAut
           )}
         </div>
 
-        <p className={styles.drawerDescription}>{skill.description}</p>
+        <p className={styles.drawerDescription}>{displayDescription}</p>
 
         {/* Tag chips */}
         {(skill.audience_tags?.length || skill.scenario_tags?.length) ? (
           <div className={styles.drawerMetaRow}>
             {skill.audience_tags?.slice(0, 2).map((tag) => (
               <span key={tag} className={styles.drawerTagChip}>
-                {tag}
+                {getSkillTagLabel(tag, tagByKey, localeKey)}
               </span>
             ))}
             {skill.scenario_tags?.slice(0, 2).map((tag) => (
               <span key={tag} className={styles.drawerTagChip}>
-                {tag}
+                {getSkillTagLabel(tag, tagByKey, localeKey)}
               </span>
             ))}
           </div>

@@ -27,6 +27,7 @@ import type { ExternalAgentSkillSource } from './skill/agentSkillImportUtils';
 import SkillCard from './skill/SkillCard';
 import SkillTagModal from './skill/SkillTagModal';
 import { filterSkillsByTags, type SkillTagFilterState } from './skill/skillFilter';
+import { getSkillSearchText } from './skill/skillPresentation';
 import { Button, Input, Modal } from '@arco-design/web-react';
 import { CloseSmall, FileZip, FolderOpen, Info, Refresh, Search } from '@icon-park/react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -105,8 +106,10 @@ const SkillsHubSettings: React.FC<SkillsHubSettingsProps> = ({ withWrapper = tru
   }, [fetchData]);
 
   const filteredSkills = useMemo(() => {
-    return filterSkillsByTags(availableSkills, search_query, tagFilter);
-  }, [availableSkills, search_query, tagFilter]);
+    return filterSkillsByTags(availableSkills, search_query, tagFilter, (skill) =>
+      getSkillSearchText(skill, tags.tagByKey, localeKey)
+    );
+  }, [availableSkills, search_query, tagFilter, tags.tagByKey, localeKey]);
 
   // Self-heal the tag filter against the current vocabulary: dropping a tag in
   // the management modal must not leave a stale key invisibly constraining a
