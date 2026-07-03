@@ -36,6 +36,8 @@ kun serve --host 127.0.0.1 --port 18899
 
 可通过 `KUN_RUNTIME_URL`、`KUN_RUNTIME_COMMAND`、`KUN_RUNTIME_ARGS`、`KUN_RUNTIME_AUTO_START` 覆盖。
 
+系统模型服务商配置可以通过 `KUN_PROVIDER`、`KUN_API_KEY`、`KUN_BASE_URL`、`KUN_API_PATH` 注入给 Kun runtime 使用，但这不等于 HangCore 可以绕过 Kun runtime。默认模式下，Kun Agent 必须连上 Kun HTTP/SSE runtime 才能完成会话；只有显式设置 `KUN_PROVIDER_FALLBACK=1` 时，adapter 才允许 provider-only 诊断 fallback。provider-only fallback 不具备 Kun 原生 AgentLoop、思考流、工具流和审批链路能力，不能作为“真实 Kun runtime 闭环”验收依据。
+
 ## 事件映射
 
 | Kun runtime event | HangCore / ACP 行为 |

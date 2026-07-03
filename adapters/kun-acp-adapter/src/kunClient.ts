@@ -86,6 +86,7 @@ export interface KunRuntimeClientOptions {
   runtimeArgs?: string[];
   startupTimeoutMs?: number;
   startupPollMs?: number;
+  providerFallback?: boolean;
   startRuntime?: (launch: KunRuntimeLaunch) => Promise<void> | void;
   fetchImpl?: typeof fetch;
   onSessionUpdate?: (update: AcpSessionUpdate) => Promise<void> | void;
@@ -152,7 +153,9 @@ export class KunRuntimeClient {
     this.startupPollMs = options.startupPollMs ?? Number(process.env.KUN_RUNTIME_STARTUP_POLL_MS || DEFAULT_STARTUP_POLL_MS);
     this.startRuntime = options.startRuntime || startDetachedRuntime;
     this.fetchImpl = options.fetchImpl || fetch;
-    this.providerFallback = ProviderFallbackClient.fromEnv(this.model, this.fetchImpl);
+    this.providerFallback = isProviderFallbackEnabled(options.providerFallback)
+      ? ProviderFallbackClient.fromEnv(this.model, this.fetchImpl)
+      : null;
     this.onSessionUpdate = options.onSessionUpdate;
     this.requestPermission = options.requestPermission;
     this.requestUserInput = options.requestUserInput;
@@ -163,7 +166,7 @@ export class KunRuntimeClient {
       await this.health();
     } catch (error) {
       const fallback = this.providerFallback;
-      if (!fallback) throw error;
+      if (!fallback) throw runtimeRequiredError(error);
       const sessionId = `provider-fallback-${Date.now().toString(36)}-${++this.fallbackSessionSeq}`;
       this.fallbackSessions.add(sessionId);
       return { sessionId };
@@ -820,6 +823,34 @@ function providerEndpoint(baseUrl: string, apiPath: string): string {
 function parseBool(raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined) return fallback;
   return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
+}
+
+function isProviderFallbackEnabled(option?: boolean): boolean {
+  if (option !== undefined) return option;
+  return parseBool(process.env.KUN_PROVIDER_FALLBACK ?? process.env.KUN_ALLOW_PROVIDER_FALLBACK, false);
+}
+
+function runtimeRequiredError(error: unknown): Error {
+  if (!hasInjectedProviderEnv() || !(error instanceof Error)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  const wrapped = new Error(
+    `${error.message} System model provider settings were injected for Kun runtime, but HangCore will not bypass the native Kun Agent loop by default. Start Kun runtime, or set KUN_PROVIDER_FALLBACK=1 only for a provider-only diagnostic fallback.`,
+    { cause: error }
+  );
+  (wrapped as Error & { code?: unknown }).code = (error as Error & { code?: unknown }).code;
+  return wrapped;
+}
+
+function hasInjectedProviderEnv(): boolean {
+  return Boolean(
+    process.env.KUN_API_KEY ||
+      process.env.KUN_BASE_URL ||
+      process.env.OPENAI_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.API_KEY ||
+      process.env.BASE_URL
+  );
 }
 
 function splitArgs(raw: string | undefined): string[] | undefined {

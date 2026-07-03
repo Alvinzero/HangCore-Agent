@@ -42,9 +42,10 @@ Environment:
   KUN_THREAD_MODEL   Kun thread model used when the ACP session creates a Kun thread
   KUN_PROVIDER_ID    NomiFun provider id injected for the selected system model
   KUN_PROVIDER       Provider protocol injected by NomiFun (openai, anthropic, ...)
-  KUN_API_KEY        Provider API key injected by NomiFun for Kun runtime startup/fallback
-  KUN_BASE_URL       Provider base URL injected by NomiFun for Kun runtime startup/fallback
-  KUN_API_PATH       Provider API path injected by NomiFun for Kun runtime startup/fallback
+  KUN_API_KEY        Provider API key injected by NomiFun for Kun runtime startup
+  KUN_BASE_URL       Provider base URL injected by NomiFun for Kun runtime startup
+  KUN_API_PATH       Provider API path injected by NomiFun for Kun runtime startup
+  KUN_PROVIDER_FALLBACK  Set 1 to allow provider-only diagnostic fallback when Kun runtime is unavailable
   KUN_RUNTIME_AUTO_START  Auto-start local Kun runtime when default URL is unreachable. Set 0 to disable
   KUN_RUNTIME_COMMAND     Runtime command for auto-start. Default: kun
   KUN_RUNTIME_ARGS        Runtime args for auto-start. Default: serve --host 127.0.0.1 --port 18899

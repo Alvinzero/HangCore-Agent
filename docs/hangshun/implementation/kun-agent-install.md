@@ -67,4 +67,5 @@ kun-acp-adapter --stdio
 - v0.1.5 起，adapter 核心支持 Kun `user_input_requested` 回调并 POST 回 `/v1/user-inputs/{inputId}`；ACP stdio 默认实现使用权限卡承载单题选项输入。
 - 默认只对 `http://127.0.0.1:18899` 自动拉起本机 runtime；如果通过 `KUN_RUNTIME_URL` 指向自定义地址，adapter 不会擅自启动本机进程，除非显式设置 `KUN_RUNTIME_AUTO_START=1` 并配置合适的命令参数。
 - 如果 Kun CLI 未安装或不在 PATH 中，会在会话启动时报出明确的自动启动失败原因。
+- 系统模型服务商配置会注入给 Kun runtime 使用，但默认不会绕过 Kun runtime 直连模型服务商；只有显式设置 `KUN_PROVIDER_FALLBACK=1` 时，才允许 provider-only 诊断 fallback。
 - 自由文本或多题 user-input 尚未有专用表单 UI，会保守取消，后续可切到 ACP elicitation 或自建弹窗。

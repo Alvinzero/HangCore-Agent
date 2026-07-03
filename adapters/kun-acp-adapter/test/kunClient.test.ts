@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { KunRuntimeClient } from '../src/kunClient';
 
 const servers: Array<{ stop: () => Promise<void> }> = [];
-const envKeys = ['KUN_PROVIDER', 'KUN_API_KEY', 'KUN_BASE_URL', 'KUN_API_PATH', 'KUN_MODEL'];
+const envKeys = [
+  'KUN_PROVIDER',
+  'KUN_API_KEY',
+  'KUN_BASE_URL',
+  'KUN_API_PATH',
+  'KUN_MODEL',
+  'KUN_PROVIDER_FALLBACK',
+];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.stop()));
@@ -110,7 +117,36 @@ describe('KunRuntimeClient', () => {
     expect(healthAttempts).toBeGreaterThanOrEqual(2);
   });
 
-  test('falls back to injected OpenAI-compatible provider when Kun runtime command is missing', async () => {
+  test('does not bypass Kun runtime with injected provider env unless fallback is explicit', async () => {
+    const providerRequests: Array<{ path: string }> = [];
+    const provider = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        providerRequests.push({ path: url.pathname });
+        return Response.json({
+          choices: [{ message: { content: 'provider-only reply' } }],
+        });
+      },
+    });
+    servers.push({ stop: () => provider.stop(true) });
+    process.env.KUN_PROVIDER = 'openai';
+    process.env.KUN_API_KEY = 'sk-test';
+    process.env.KUN_BASE_URL = `http://127.0.0.1:${provider.port}`;
+    process.env.KUN_API_PATH = '/v1/chat/completions';
+    process.env.KUN_MODEL = 'deepseek-chat';
+    const client = new KunRuntimeClient({
+      baseUrl: 'http://127.0.0.1:9',
+      autoStartRuntime: false,
+    });
+
+    await expect(client.createSession({ cwd: '/tmp/project' })).rejects.toThrow(
+      'Kun runtime is not reachable at http://127.0.0.1:9'
+    );
+    expect(providerRequests).toEqual([]);
+  });
+
+  test('falls back to injected OpenAI-compatible provider only when explicitly enabled', async () => {
     const providerRequests: Array<{ path: string; auth?: string | null; body?: unknown }> = [];
     const provider = Bun.serve({
       port: 0,
@@ -136,6 +172,7 @@ describe('KunRuntimeClient', () => {
     process.env.KUN_BASE_URL = `http://127.0.0.1:${provider.port}`;
     process.env.KUN_API_PATH = '/v1/chat/completions';
     process.env.KUN_MODEL = 'deepseek-chat';
+    process.env.KUN_PROVIDER_FALLBACK = '1';
     const updates: unknown[] = [];
     const client = new KunRuntimeClient({
       baseUrl: 'http://127.0.0.1:18899',
@@ -195,6 +232,7 @@ describe('KunRuntimeClient', () => {
     process.env.KUN_BASE_URL = `http://127.0.0.1:${provider.port}`;
     process.env.KUN_API_PATH = '/v1/chat/completions';
     process.env.KUN_MODEL = 'deepseek-chat';
+    process.env.KUN_PROVIDER_FALLBACK = '1';
     const updates: unknown[] = [];
     const client = new KunRuntimeClient({
       baseUrl: 'http://127.0.0.1:9',
