@@ -2,9 +2,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use nomifun_common::{AppError, workspace_path_has_edge_whitespace_segment};
+use regex::Regex;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, broadcast, watch};
@@ -54,6 +56,18 @@ pub(super) fn prepare_command_cwd(cwd: &str) -> Result<PathBuf, AppError> {
             e
         ))),
     }
+}
+
+static SENSITIVE_ENV_ASSIGNMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)=("[^"]*"|'[^']*'|[^\s]+)"#)
+        .expect("valid sensitive env assignment regex")
+});
+
+pub(super) fn redact_command_preview(preview: &str) -> String {
+    let redacted = nomi_redact::redact_secrets(preview).into_owned();
+    SENSITIVE_ENV_ASSIGNMENT_RE
+        .replace_all(&redacted, "$1=\"[REDACTED_SECRET]\"")
+        .into_owned()
 }
 
 /// Manages a CLI subprocess with optional JSON-over-stdin/stdout communication.
@@ -320,6 +334,25 @@ pub(super) mod tests {
     }
 
     // ── Lifecycle tests (apply to both modes) ────────────────────────
+
+    #[test]
+    fn command_preview_redacts_sensitive_env_values() {
+        let preview = concat!(
+            r#"env KUN_API_KEY="sk-ABCDEFGHIJ0123456789xyz" "#,
+            r#"ANTHROPIC_API_KEY="anthropic-secret-value-123" "#,
+            r#"TOKEN=abcdef0123456789 NORMAL_VAR="visible""#
+        );
+
+        let redacted = redact_command_preview(preview);
+
+        assert!(!redacted.contains("sk-ABCDEFGHIJ0123456789xyz"));
+        assert!(!redacted.contains("anthropic-secret-value-123"));
+        assert!(!redacted.contains("abcdef0123456789"));
+        assert!(redacted.contains(r#"KUN_API_KEY="[REDACTED_SECRET]""#));
+        assert!(redacted.contains(r#"ANTHROPIC_API_KEY="[REDACTED_SECRET]""#));
+        assert!(redacted.contains(r#"TOKEN="[REDACTED_SECRET]""#));
+        assert!(redacted.contains(r#"NORMAL_VAR="visible""#));
+    }
 
     #[tokio::test]
     async fn is_running_reflects_process_state() {

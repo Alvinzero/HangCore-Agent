@@ -35,6 +35,9 @@ function startFakeKun(events: unknown[]) {
         });
         return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
       }
+      if (url.pathname === '/v1/approvals/approval-1' && request.method === 'POST') {
+        return Response.json({ approvalId: 'approval-1', decision: 'allow', status: 'allowed' });
+      }
       return Response.json({ message: 'not found' }, { status: 404 });
     },
   });
@@ -55,6 +58,18 @@ function makeWriter() {
   };
 }
 
+async function waitForMessage(lines: string[], predicate: (message: Record<string, unknown>) => boolean) {
+  const deadline = Date.now() + 250;
+  while (Date.now() <= deadline) {
+    for (const line of lines) {
+      const message = JSON.parse(line) as Record<string, unknown>;
+      if (predicate(message)) return message;
+    }
+    await Bun.sleep(5);
+  }
+  throw new Error('timed out waiting for JSON-RPC message');
+}
+
 describe('KunAcpAgent JSON-RPC stdio bridge', () => {
   test('writes JSON-RPC 2.0 responses for client requests', async () => {
     const { lines, writer } = makeWriter();
@@ -72,7 +87,7 @@ describe('KunAcpAgent JSON-RPC stdio bridge', () => {
         id: 1,
         result: expect.objectContaining({
           protocolVersion: 1,
-          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.2' },
+          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.5' },
         }),
       })
     );
@@ -127,6 +142,78 @@ describe('KunAcpAgent JSON-RPC stdio bridge', () => {
         jsonrpc: '2.0',
         id: 2,
         result: { stopReason: 'end_turn' },
+      })
+    );
+  });
+
+  test('sends ACP permission requests and resolves them from client JSON-RPC responses', async () => {
+    const baseUrl = startFakeKun([
+      {
+        kind: 'approval_requested',
+        seq: 1,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        approvalId: 'approval-1',
+        toolName: 'shell',
+        status: 'pending',
+        summary: 'Run npm test',
+      },
+      { kind: 'turn_completed', seq: 2, threadId: 'turn-kun-1' },
+    ]);
+    const { lines, writer } = makeWriter();
+    const agent = new KunAcpAgent(writer, { baseUrl });
+
+    const promptCall = handleLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'session/prompt',
+        params: { sessionId: 'thread-kun-1', prompt: [{ type: 'text', text: 'ping' }] },
+      }),
+      agent,
+      writer
+    );
+
+    const permissionRequest = await waitForMessage(
+      lines,
+      (message) => message.method === 'session/request_permission'
+    );
+    expect(permissionRequest).toEqual(
+      expect.objectContaining({
+        jsonrpc: '2.0',
+        method: 'session/request_permission',
+        params: expect.objectContaining({
+          sessionId: 'thread-kun-1',
+          toolCall: expect.objectContaining({
+            toolCallId: 'approval-1',
+            title: 'shell',
+          }),
+        }),
+      })
+    );
+
+    await handleLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: permissionRequest.id,
+        result: { outcome: { outcome: 'selected', optionId: 'allow_once' } },
+      }),
+      agent,
+      writer
+    );
+    await promptCall;
+
+    const messages = lines.map((line) => JSON.parse(line));
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { stopReason: 'end_turn' },
+      })
+    );
+    expect(messages).not.toContainEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({ message: 'Invalid JSON-RPC request' }),
       })
     );
   });

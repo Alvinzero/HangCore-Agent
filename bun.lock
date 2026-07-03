@@ -11,14 +11,14 @@
     },
     "adapters/kun-acp-adapter": {
       "name": "@hangcore/kun-acp-adapter",
-      "version": "0.1.2",
+      "version": "0.1.5",
       "bin": {
         "kun-acp-adapter": "./bin/kun-acp-adapter",
       },
     },
     "ui": {
       "name": "@nomifun-tauri/ui",
-      "version": "0.1.2",
+      "version": "0.1.5",
       "dependencies": {
         "@agentclientprotocol/sdk": "^0.18.2",
         "@anthropic-ai/sdk": "^0.71.2",

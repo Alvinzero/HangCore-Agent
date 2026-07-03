@@ -8,7 +8,8 @@ use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, info, warn};
 
 use super::{
-    CliAgentProcess, EVENT_CHANNEL_CAPACITY, STDERR_BUFFER_MAX, prepare_command_cwd, tracked_process_group_id,
+    CliAgentProcess, EVENT_CHANNEL_CAPACITY, STDERR_BUFFER_MAX, prepare_command_cwd,
+    redact_command_preview, tracked_process_group_id,
 };
 
 impl CliAgentProcess {
@@ -45,7 +46,7 @@ impl CliAgentProcess {
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(prepare_command_cwd(cwd)?);
         }
-        let preview = cmd.to_string();
+        let preview = redact_command_preview(&cmd.to_string());
         info!(command = %preview, "Spawning CLI process (SDK mode)");
         let mut child: Child = cmd.spawn().map_err(|e| {
             error!(command = %preview, error = %ErrorChain(&e), "Failed to spawn CLI process");

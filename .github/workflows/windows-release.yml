@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.2"
+        default: "0.1.5"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.2 fixes the Kun Agent manual install entry and adds the kun-acp-adapter MVP, which bridges NomiFun ACP stdio sessions to a running local Kun HTTP/SSE loop."
+        default: "HangCore Agent v0.1.5 completes the real Kun runtime loop through kun-acp-adapter, including ACP permission bridging, Kun approval/user-input resolution, and richer tool-call lifecycle mapping."
   push:
     tags:
       - "v*.*.*"

@@ -22,10 +22,56 @@ export type AcpSessionUpdate = {
   update: Record<string, unknown>;
 };
 
+export type AcpPermissionRequest = {
+  sessionId: string;
+  toolCall: {
+    toolCallId: string;
+    title?: string;
+    kind?: 'read' | 'edit' | 'execute';
+    status?: 'pending' | 'in_progress' | 'completed' | 'failed';
+    rawInput?: Record<string, unknown>;
+  };
+  options: Array<{
+    optionId: string;
+    name: string;
+    kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+  }>;
+  _meta?: Record<string, unknown>;
+};
+
+export type AcpPermissionDecision =
+  | { outcome: 'selected'; optionId: string }
+  | { outcome: 'cancelled' };
+
+export type KunUserInputRequest = {
+  sessionId: string;
+  inputId: string;
+  prompt?: string;
+  questions?: Array<{
+    header?: string;
+    id?: string;
+    question?: string;
+    options?: Array<{ label?: string; description?: string }>;
+  }>;
+};
+
+export type KunUserInputDecision =
+  | { cancelled: true; answers?: undefined }
+  | { cancelled?: false; answers: Array<{ id: string; label: string; value: string }> };
+
 export type KunRuntimeLaunch = {
   baseUrl: string;
   command: string;
   args: string[];
+};
+
+type ProviderFallbackOptions = {
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  apiPath: string;
+  model: string;
+  fetchImpl: typeof fetch;
 };
 
 export interface KunRuntimeClientOptions {
@@ -43,6 +89,8 @@ export interface KunRuntimeClientOptions {
   startRuntime?: (launch: KunRuntimeLaunch) => Promise<void> | void;
   fetchImpl?: typeof fetch;
   onSessionUpdate?: (update: AcpSessionUpdate) => Promise<void> | void;
+  requestPermission?: (request: AcpPermissionRequest) => Promise<AcpPermissionDecision> | AcpPermissionDecision;
+  requestUserInput?: (request: KunUserInputRequest) => Promise<KunUserInputDecision> | KunUserInputDecision;
 }
 
 type KunSession = {
@@ -76,9 +124,14 @@ export class KunRuntimeClient {
   private readonly startupPollMs: number;
   private readonly startRuntime: (launch: KunRuntimeLaunch) => Promise<void> | void;
   private readonly fetchImpl: typeof fetch;
+  private readonly providerFallback: ProviderFallbackClient | null;
   private readonly onSessionUpdate?: (update: AcpSessionUpdate) => Promise<void> | void;
+  private readonly requestPermission?: (request: AcpPermissionRequest) => Promise<AcpPermissionDecision> | AcpPermissionDecision;
+  private readonly requestUserInput?: (request: KunUserInputRequest) => Promise<KunUserInputDecision> | KunUserInputDecision;
   private readonly lastSeqByThread = new Map<string, number>();
   private readonly activeTurns = new Map<string, { turnId: string; abort: AbortController }>();
+  private readonly fallbackSessions = new Set<string>();
+  private fallbackSessionSeq = 0;
   private runtimeStartAttempt?: Promise<void>;
 
   constructor(options: KunRuntimeClientOptions = {}) {
@@ -99,11 +152,22 @@ export class KunRuntimeClient {
     this.startupPollMs = options.startupPollMs ?? Number(process.env.KUN_RUNTIME_STARTUP_POLL_MS || DEFAULT_STARTUP_POLL_MS);
     this.startRuntime = options.startRuntime || startDetachedRuntime;
     this.fetchImpl = options.fetchImpl || fetch;
+    this.providerFallback = ProviderFallbackClient.fromEnv(this.model, this.fetchImpl);
     this.onSessionUpdate = options.onSessionUpdate;
+    this.requestPermission = options.requestPermission;
+    this.requestUserInput = options.requestUserInput;
   }
 
   async createSession(input: { cwd?: string } = {}): Promise<KunSession> {
-    await this.health();
+    try {
+      await this.health();
+    } catch (error) {
+      const fallback = this.providerFallback;
+      if (!fallback) throw error;
+      const sessionId = `provider-fallback-${Date.now().toString(36)}-${++this.fallbackSessionSeq}`;
+      this.fallbackSessions.add(sessionId);
+      return { sessionId };
+    }
     const workspace = input.cwd || process.cwd();
     const body: Record<string, unknown> = {
       title: this.title,
@@ -128,9 +192,12 @@ export class KunRuntimeClient {
   }
 
   async prompt(sessionId: string, request: AcpPromptRequest): Promise<AcpPromptResponse> {
+    if (this.isProviderFallbackSession(sessionId)) {
+      return this.promptWithProviderFallback(sessionId, request);
+    }
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.2');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.5');
     }
 
     const started = await this.request<Record<string, unknown>>(`/v1/threads/${encodeURIComponent(sessionId)}/turns`, {
@@ -153,6 +220,7 @@ export class KunRuntimeClient {
   }
 
   async cancel(sessionId: string): Promise<void> {
+    if (this.isProviderFallbackSession(sessionId)) return;
     const active = this.activeTurns.get(sessionId);
     if (!active) return;
     active.abort.abort();
@@ -196,6 +264,7 @@ export class KunRuntimeClient {
       if (typeof event.seq === 'number') this.lastSeqByThread.set(sessionId, event.seq);
       const update = mapKunEventToAcp(sessionId, event);
       if (update) await this.onSessionUpdate?.(update);
+      await this.resolveInteractiveEvent(sessionId, event);
       terminal = terminalFromKunEvent(event) || terminal;
       return terminal === null;
     });
@@ -275,6 +344,138 @@ export class KunRuntimeClient {
       { cause: lastError }
     );
   }
+
+  private async promptWithProviderFallback(sessionId: string, request: AcpPromptRequest): Promise<AcpPromptResponse> {
+    const prompt = promptToText(request.prompt || []);
+    if (!prompt.trim()) {
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.5');
+    }
+    const text = await this.providerFallback!.complete(prompt);
+    if (text) {
+      await this.onSessionUpdate?.(textUpdate(sessionId, 'agent_message_chunk', text));
+    }
+    return { stopReason: 'end_turn' };
+  }
+
+  private isProviderFallbackSession(sessionId: string): boolean {
+    return (
+      this.fallbackSessions.has(sessionId) ||
+      (this.providerFallback !== null && sessionId.startsWith('provider-fallback-'))
+    );
+  }
+
+  private async resolveInteractiveEvent(sessionId: string, event: RuntimeEvent): Promise<void> {
+    if (event.kind === 'approval_requested') {
+      await this.resolveApprovalRequest(sessionId, event);
+    } else if (event.kind === 'user_input_requested') {
+      await this.resolveUserInputRequest(sessionId, event);
+    }
+  }
+
+  private async resolveApprovalRequest(sessionId: string, event: RuntimeEvent): Promise<void> {
+    const request = permissionRequestFromKunEvent(sessionId, event);
+    if (!request) return;
+    const decision = this.requestPermission ? await this.requestPermission(request) : { outcome: 'cancelled' as const };
+    const body = permissionDecisionToKunBody(decision);
+    await this.request(`/v1/approvals/${encodeURIComponent(request.toolCall.toolCallId)}`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  private async resolveUserInputRequest(sessionId: string, event: RuntimeEvent): Promise<void> {
+    const request = userInputRequestFromKunEvent(sessionId, event);
+    if (!request) return;
+    const decision = this.requestUserInput ? await this.requestUserInput(request) : { cancelled: true as const };
+    const body = decision.cancelled ? { cancelled: true } : { answers: decision.answers };
+    await this.request(`/v1/user-inputs/${encodeURIComponent(request.inputId)}`, {
+      method: 'POST',
+      body,
+    });
+  }
+}
+
+class ProviderFallbackClient {
+  private constructor(private readonly options: ProviderFallbackOptions) {}
+
+  static fromEnv(model: string, fetchImpl: typeof fetch): ProviderFallbackClient | null {
+    const provider = (process.env.KUN_PROVIDER || process.env.PROVIDER || 'openai').trim().toLowerCase();
+    const apiKey =
+      process.env.KUN_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.API_KEY ||
+      '';
+    const baseUrl =
+      process.env.KUN_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      process.env.ANTHROPIC_BASE_URL ||
+      process.env.BASE_URL ||
+      '';
+    if (!apiKey.trim() || !baseUrl.trim()) return null;
+    return new ProviderFallbackClient({
+      provider,
+      apiKey,
+      baseUrl,
+      apiPath: process.env.KUN_API_PATH || defaultProviderApiPath(provider),
+      model,
+      fetchImpl,
+    });
+  }
+
+  async complete(prompt: string): Promise<string> {
+    if (this.options.provider === 'anthropic') {
+      return this.completeAnthropic(prompt);
+    }
+    return this.completeOpenAICompatible(prompt);
+  }
+
+  private async completeOpenAICompatible(prompt: string): Promise<string> {
+    const response = await this.options.fetchImpl(providerEndpoint(this.options.baseUrl, this.options.apiPath), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.options.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.options.model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Injected model provider request failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
+    }
+    const payload = await response.json();
+    const content = firstOpenAICompatibleContent(payload);
+    if (!content) throw new Error('Injected model provider returned an empty response');
+    return content;
+  }
+
+  private async completeAnthropic(prompt: string): Promise<string> {
+    const response = await this.options.fetchImpl(providerEndpoint(this.options.baseUrl, this.options.apiPath), {
+      method: 'POST',
+      headers: {
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'x-api-key': this.options.apiKey,
+      },
+      body: JSON.stringify({
+        model: this.options.model,
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Injected Anthropic provider request failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
+    }
+    const payload = await response.json();
+    const content = contentToText((payload as { content?: unknown }).content);
+    if (!content) throw new Error('Injected Anthropic provider returned an empty response');
+    return content;
+  }
 }
 
 export function promptToText(blocks: AcpContentBlock[]): string {
@@ -300,11 +501,101 @@ export function mapKunEventToAcp(sessionId: string, event: RuntimeEvent): AcpSes
       return textUpdate(sessionId, 'agent_thought_chunk', text);
     case 'tool_call_started':
       return toolCallUpdate(sessionId, event, false);
+    case 'tool_call_ready':
+      return toolCallReadyUpdate(sessionId, event);
     case 'tool_call_finished':
       return toolCallUpdate(sessionId, event, true);
+    case 'item_created':
+    case 'item_updated':
+      if ((event.item as { kind?: unknown } | undefined)?.kind === 'tool_call') {
+        return toolCallUpdate(sessionId, event, false);
+      }
+      return null;
+    case 'item_completed':
+      if ((event.item as { kind?: unknown } | undefined)?.kind === 'tool_call') {
+        return toolCallUpdate(sessionId, event, true);
+      }
+      return null;
     default:
       return null;
   }
+}
+
+function permissionRequestFromKunEvent(sessionId: string, event: RuntimeEvent): AcpPermissionRequest | null {
+  const approvalId = stringField(event, ['approvalId', 'approval_id']) || stringField(event.item, ['approvalId', 'approval_id', 'id']);
+  if (!approvalId) return null;
+  const toolName = stringField(event, ['toolName', 'tool_name']) || stringField(event.item, ['toolName', 'tool_name']) || 'Kun tool';
+  const summary = stringField(event, ['summary', 'displayText', 'message']) || stringField(event.item, ['summary', 'text']);
+  const rawInput: Record<string, unknown> = {
+    description: summary || `Kun requests permission for ${toolName}`,
+    toolName,
+  };
+  const approvalPolicy = stringField(event, ['approvalPolicy', 'approval_policy']);
+  const sandboxMode = stringField(event, ['sandboxMode', 'sandbox_mode']);
+  if (approvalPolicy) rawInput.approvalPolicy = approvalPolicy;
+  if (sandboxMode) rawInput.sandboxMode = sandboxMode;
+  return {
+    sessionId,
+    toolCall: {
+      toolCallId: approvalId,
+      title: toolName,
+      kind: 'execute',
+      status: 'pending',
+      rawInput,
+    },
+    options: [
+      { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+    ],
+    _meta: {
+      kunEventKind: event.kind,
+      ...(typeof event.seq === 'number' ? { kunSeq: event.seq } : {}),
+    },
+  };
+}
+
+function userInputRequestFromKunEvent(sessionId: string, event: RuntimeEvent): KunUserInputRequest | null {
+  const inputId = stringField(event, ['inputId', 'input_id']) || stringField(event.item, ['inputId', 'input_id', 'id']);
+  if (!inputId) return null;
+  return {
+    sessionId,
+    inputId,
+    prompt: stringField(event, ['prompt']) || stringField(event.item, ['prompt']),
+    questions: questionsFromKunEvent(event),
+  };
+}
+
+function questionsFromKunEvent(event: RuntimeEvent): KunUserInputRequest['questions'] {
+  const questions = (event.questions || (event.item as { questions?: unknown } | undefined)?.questions) as unknown;
+  if (!Array.isArray(questions)) return undefined;
+  return questions
+    .filter((question): question is Record<string, unknown> => Boolean(question && typeof question === 'object'))
+    .map((question) => ({
+      header: stringField(question, ['header']),
+      id: stringField(question, ['id']),
+      question: stringField(question, ['question']),
+      options: optionsFromQuestion(question),
+    }));
+}
+
+function optionsFromQuestion(question: Record<string, unknown>): Array<{ label?: string; description?: string }> | undefined {
+  const options = question.options;
+  if (!Array.isArray(options)) return undefined;
+  return options
+    .filter((option): option is Record<string, unknown> => Boolean(option && typeof option === 'object'))
+    .map((option) => ({
+      label: stringField(option, ['label']),
+      description: stringField(option, ['description']) || '',
+    }));
+}
+
+function permissionDecisionToKunBody(decision: AcpPermissionDecision): { decision: 'allow' | 'deny'; reason?: string } {
+  if (decision.outcome !== 'selected') {
+    return { decision: 'deny', reason: 'cancelled' };
+  }
+  const option = decision.optionId.toLowerCase();
+  if (option.includes('allow')) return { decision: 'allow' };
+  return { decision: 'deny' };
 }
 
 function textUpdate(sessionId: string, kind: 'agent_message_chunk' | 'agent_thought_chunk', text: string): AcpSessionUpdate {
@@ -313,6 +604,23 @@ function textUpdate(sessionId: string, kind: 'agent_message_chunk' | 'agent_thou
     update: {
       sessionUpdate: kind,
       content: { type: 'text', text },
+    },
+  };
+}
+
+function toolCallReadyUpdate(sessionId: string, event: RuntimeEvent): AcpSessionUpdate | null {
+  const toolCallId = stringField(event, ['callId', 'call_id', 'itemId']);
+  if (!toolCallId) return null;
+  const title = stringField(event, ['toolName', 'tool_name']) || 'Kun tool';
+  return {
+    sessionId,
+    update: {
+      sessionUpdate: 'tool_call',
+      toolCallId,
+      title,
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { readyCount: numberField(event, ['readyCount', 'ready_count']) ?? 1 },
     },
   };
 }
@@ -452,8 +760,61 @@ function stringField(source: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
+function numberField(source: unknown, keys: string[]): number | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const obj = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function firstOpenAICompatibleContent(payload: unknown): string {
+  const choices = (payload as { choices?: unknown[] })?.choices;
+  const first = Array.isArray(choices) ? (choices[0] as Record<string, unknown> | undefined) : undefined;
+  if (!first) return '';
+  const message = first.message as Record<string, unknown> | undefined;
+  return (
+    contentToText(message?.content) ||
+    contentToText(first.text) ||
+    contentToText((first.delta as Record<string, unknown> | undefined)?.content)
+  );
+}
+
+function contentToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      const obj = part as Record<string, unknown>;
+      return typeof obj.text === 'string' ? obj.text : '';
+    })
+    .filter(Boolean)
+    .join('');
+}
+
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function defaultProviderApiPath(provider: string): string {
+  return provider === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
+}
+
+function providerEndpoint(baseUrl: string, apiPath: string): string {
+  const base = stripTrailingSlash(baseUrl.trim());
+  const path = apiPath.trim();
+  if (!path) return base;
+  if (/^https?:\/\//i.test(path)) return stripTrailingSlash(path);
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  if (base.endsWith('/chat/completions') || base.endsWith('/messages')) return base;
+  if (base.endsWith('/v1') && normalizedPath.startsWith('/v1/')) {
+    return `${base}${normalizedPath.slice('/v1'.length)}`;
+  }
+  return `${base}${normalizedPath}`;
 }
 
 function parseBool(raw: string | undefined, fallback: boolean): boolean {

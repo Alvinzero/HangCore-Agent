@@ -397,7 +397,7 @@ fn classify_agent_lifecycle(lower: &str) -> Option<ClassifiedError> {
             AgentErrorCode::UserAgentSessionNotFound,
         ));
     }
-    if lower.contains("command not found") {
+    if lower.contains("command not found") || lower.contains("executable not found") {
         return Some(agent_error(
             "The selected Agent command was not found",
             AgentErrorCode::UserAgentCommandNotFound,
@@ -1091,6 +1091,12 @@ mod tests {
         );
         assert_classification(
             "filesystem: Command not found: npx",
+            AgentErrorCode::UserAgentCommandNotFound,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckLocalCommand,
+        );
+        assert_classification(
+            "Kun runtime is not reachable at http://127.0.0.1:18899. Auto-start failed with `kun serve --host 127.0.0.1 --port 18899`: Executable not found in $PATH: \"kun\"",
             AgentErrorCode::UserAgentCommandNotFound,
             AgentErrorOwnership::UserAgent,
             AgentErrorResolutionKind::CheckLocalCommand,

@@ -4,15 +4,17 @@ use crate::agent_task::AgentInstance;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::factory::context::FactoryContext;
+use crate::factory::provider_config::{ResolvedProviderFields, resolve_provider_fields};
+use crate::knowledge_completer::first_enabled_model;
 use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
 use crate::types::BuildTaskOptions;
 use agent_client_protocol::schema::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio,
 };
 use nomifun_api_types::{AcpBuildExtra, SessionMcpServer, SessionMcpTransport};
-use nomifun_common::{AppError, CommandSpec};
-use nomifun_db::IMcpServerRepository;
-use nomifun_db::models::McpServerRow;
+use nomifun_common::{AppError, CommandSpec, EnvVar};
+use nomifun_db::{IMcpServerRepository, IProviderRepository};
+use nomifun_db::models::{McpServerRow, Provider};
 use nomifun_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
 use nomifun_runtime::resolve_command_path;
 use tracing::{info, warn};
@@ -150,6 +152,22 @@ pub(super) async fn build(
             tracing::info!(?keys, "cc-switch: env vars injected");
         }
     }
+    if meta.backend.as_deref() == Some("kun") {
+        match inject_default_kun_provider_env(&deps.provider_repo, &deps.encryption_key, &mut env)
+            .await?
+        {
+            Some(selection) => {
+                info!(
+                    provider_id = %selection.provider_id,
+                    model = %selection.model,
+                    "kun: system provider env injected"
+                );
+            }
+            None => {
+                info!("kun: no enabled system provider/model found; using Kun runtime defaults");
+            }
+        }
+    }
 
     let command_spec = CommandSpec {
         command,
@@ -270,6 +288,106 @@ pub(super) async fn build(
         .await;
 
     Ok(instance)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KunProviderSelection {
+    provider_id: String,
+    model: String,
+}
+
+async fn inject_default_kun_provider_env(
+    provider_repo: &Arc<dyn IProviderRepository>,
+    encryption_key: &[u8; 32],
+    env: &mut Vec<EnvVar>,
+) -> Result<Option<KunProviderSelection>, AppError> {
+    let providers = provider_repo
+        .list()
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list providers for Kun Agent: {e}")))?;
+    let Some(selection) = select_default_kun_provider_model(&providers) else {
+        return Ok(None);
+    };
+    let fields = resolve_provider_fields(
+        provider_repo,
+        encryption_key,
+        &selection.provider_id,
+        &selection.model,
+    )
+    .await?;
+    append_kun_provider_env(env, &selection.provider_id, &fields);
+    Ok(Some(selection))
+}
+
+fn select_default_kun_provider_model(providers: &[Provider]) -> Option<KunProviderSelection> {
+    providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .find_map(|provider| {
+            first_enabled_model(&provider.models, provider.model_enabled.as_deref()).map(
+                |model| KunProviderSelection {
+                    provider_id: provider.id.clone(),
+                    model,
+                },
+            )
+        })
+}
+
+fn append_kun_provider_env(
+    env: &mut Vec<EnvVar>,
+    provider_id: &str,
+    fields: &ResolvedProviderFields,
+) {
+    push_env(env, "KUN_PROVIDER_ID", provider_id);
+    push_env(env, "KUN_PROVIDER", &fields.provider);
+    push_env(env, "KUN_THREAD_MODEL", &fields.model);
+    push_env(env, "KUN_MODEL", &fields.model);
+    push_env(env, "KUN_API_KEY", &fields.api_key);
+    push_env(env, "API_KEY", &fields.api_key);
+    push_env(env, "MODEL", &fields.model);
+    if let Some(base_url) = fields.base_url.as_deref().filter(|value| !value.is_empty()) {
+        let api_path = fields
+            .compat_overrides
+            .api_path
+            .as_deref()
+            .unwrap_or("/v1/chat/completions");
+        push_env(env, "KUN_BASE_URL", base_url);
+        push_env(env, "KUN_API_PATH", api_path);
+        push_env(env, "BASE_URL", base_url);
+        push_env(env, "OPENAI_BASE_URL", &openai_sdk_base_url(base_url, api_path));
+        if fields.provider == "anthropic" {
+            push_env(env, "ANTHROPIC_BASE_URL", base_url);
+        }
+    }
+    if fields.provider == "anthropic" {
+        push_env(env, "ANTHROPIC_API_KEY", &fields.api_key);
+        push_env(env, "ANTHROPIC_MODEL", &fields.model);
+    } else {
+        push_env(env, "OPENAI_API_KEY", &fields.api_key);
+    }
+}
+
+fn push_env(env: &mut Vec<EnvVar>, name: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if let Some(existing) = env.iter_mut().find(|item| item.name == name) {
+        existing.value = value.to_owned();
+    } else {
+        env.push(EnvVar {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        });
+    }
+}
+
+fn openai_sdk_base_url(base_url: &str, api_path: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if api_path == "/v1/chat/completions" && !trimmed.ends_with("/v1") {
+        format!("{trimmed}/v1")
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 /// Load the operator's enabled MCP servers from the DB, log+skip any rows
@@ -641,6 +759,90 @@ mod tests {
     fn row_to_sdk_stdio_missing_command_errors() {
         let row = make_row(5, "bad", "stdio", r#"{"args":[]}"#, true, false);
         assert!(row_to_sdk_mcp_server(&row).is_err());
+    }
+
+    #[test]
+    fn kun_default_model_selects_first_enabled_provider_model() {
+        let rows = vec![
+            provider_row("disabled", "openai", false, r#"["off-model"]"#, None),
+            provider_row(
+                "enabled",
+                "custom",
+                true,
+                r#"["disabled-model","usable-model"]"#,
+                Some(r#"{"disabled-model":false}"#),
+            ),
+        ];
+
+        let selected = select_default_kun_provider_model(&rows).expect("enabled provider/model");
+
+        assert_eq!(selected.provider_id, "enabled");
+        assert_eq!(selected.model, "usable-model");
+    }
+
+    #[test]
+    fn kun_provider_env_exposes_system_provider_to_adapter_and_runtime() {
+        let fields = crate::factory::provider_config::ResolvedProviderFields {
+            provider: "openai".to_owned(),
+            api_key: "sk-test".to_owned(),
+            model: "gpt-4o".to_owned(),
+            base_url: Some("https://api.example.com/v1".to_owned()),
+            compat_overrides: Default::default(),
+            bedrock_config: None,
+            context_limit: None,
+        };
+        let mut env = Vec::new();
+
+        append_kun_provider_env(&mut env, "prov-1", &fields);
+
+        assert_env(&env, "KUN_PROVIDER_ID", "prov-1");
+        assert_env(&env, "KUN_THREAD_MODEL", "gpt-4o");
+        assert_env(&env, "KUN_MODEL", "gpt-4o");
+        assert_env(&env, "KUN_PROVIDER", "openai");
+        assert_env(&env, "KUN_API_KEY", "sk-test");
+        assert_env(&env, "KUN_BASE_URL", "https://api.example.com/v1");
+        assert_env(&env, "OPENAI_API_KEY", "sk-test");
+        assert_env(&env, "OPENAI_BASE_URL", "https://api.example.com/v1");
+        assert_env(&env, "API_KEY", "sk-test");
+        assert_env(&env, "BASE_URL", "https://api.example.com/v1");
+        assert_env(&env, "MODEL", "gpt-4o");
+    }
+
+    fn provider_row(
+        id: &str,
+        platform: &str,
+        enabled: bool,
+        models: &str,
+        model_enabled: Option<&str>,
+    ) -> nomifun_db::models::Provider {
+        nomifun_db::models::Provider {
+            id: id.to_owned(),
+            platform: platform.to_owned(),
+            name: format!("Provider {id}"),
+            base_url: "https://api.example.com/v1".to_owned(),
+            api_key_encrypted: "encrypted".to_owned(),
+            models: models.to_owned(),
+            enabled,
+            capabilities: "[]".to_owned(),
+            context_limit: None,
+            model_context_limits: None,
+            model_protocols: None,
+            model_descriptions: None,
+            model_enabled: model_enabled.map(str::to_owned),
+            model_health: None,
+            bedrock_config: None,
+            is_full_url: false,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn assert_env(env: &[nomifun_common::EnvVar], name: &str, value: &str) {
+        assert_eq!(
+            env.iter().find(|item| item.name == name).map(|item| item.value.as_str()),
+            Some(value),
+            "expected {name}={value}, got {env:?}"
+        );
     }
 
     // -- load_user_mcp_servers integration -----------------------------------
