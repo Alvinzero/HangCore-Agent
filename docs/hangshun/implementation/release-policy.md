@@ -78,8 +78,8 @@
 | `v0.1.3` | Skills 中文友好显示与搜索 | 已并入后续发布 | Guid 抽屉和 Skills Hub 中内置 Skills 名称、描述、标签中文化，运行时 Skill id 保持不变。 |
 | `v0.1.4` | Kun Agent 模型服务商复用与 provider fallback | 用户手动发布 | Kun Agent 复用系统设置里的第三方模型服务商配置；曾允许 runtime / 命令不可用时走注入 provider fallback。 |
 | `v0.1.5` | Kun runtime 协议映射增强 | 已发布 | `kun-acp-adapter` 使用 Kun 原 HTTP/SSE runtime 契约并补齐 ACP permission、Kun approval/user-input 回填、tool lifecycle 映射和 adapter 设计文档；但 provider fallback 默认可绕过 Kun Agent loop，需要后续纠偏。 |
+| `v0.1.6` | Kun runtime 真实链路纠偏 | 发布准备中 | provider fallback 改为显式诊断模式；adapter 自动发现 Kun 源码 runtime 并复用系统模型服务商配置启动真实 runtime；CRLF SSE frame 边界兼容以降低流式输出缓冲延迟。 |
 
 ## 6. 下一版本候选
 
-- `v0.1.6`: Kun runtime 真实链路纠偏，provider fallback 改为显式诊断模式，并补真实 runtime 长链路验收。
 - `v0.1.7`: CodingTask + SpecArtifact 最小结构化保存。

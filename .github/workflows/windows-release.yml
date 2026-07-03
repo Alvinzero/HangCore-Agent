@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.5"
+        default: "0.1.6"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.5 completes the real Kun runtime loop through kun-acp-adapter, including ACP permission bridging, Kun approval/user-input resolution, and richer tool-call lifecycle mapping."
+        default: "HangCore Agent v0.1.6 corrects Kun Agent to require the native Kun runtime by default, auto-starts a discovered Kun source runtime, and speeds up CRLF SSE streaming."
   push:
     tags:
       - "v*.*.*"

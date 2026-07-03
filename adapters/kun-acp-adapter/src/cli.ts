@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { startStdio } from './acpServer';
 
-const VERSION = '0.1.5';
+const VERSION = '0.1.6';
 
 type CliOptions = {
   stdio: boolean;
@@ -47,8 +47,10 @@ Environment:
   KUN_API_PATH       Provider API path injected by NomiFun for Kun runtime startup
   KUN_PROVIDER_FALLBACK  Set 1 to allow provider-only diagnostic fallback when Kun runtime is unavailable
   KUN_RUNTIME_AUTO_START  Auto-start local Kun runtime when default URL is unreachable. Set 0 to disable
-  KUN_RUNTIME_COMMAND     Runtime command for auto-start. Default: kun
-  KUN_RUNTIME_ARGS        Runtime args for auto-start. Default: serve --host 127.0.0.1 --port 18899
+  KUN_SOURCE_DIR          Kun source checkout to use when no global kun command is installed
+  KUN_DATA_DIR            Kun runtime data directory. Default: NomiFun data dir/kun-runtime
+  KUN_RUNTIME_COMMAND     Runtime command for auto-start. Default: discovered Kun source runtime, then kun
+  KUN_RUNTIME_ARGS        Runtime args for auto-start. Default: serve --host 127.0.0.1 --port 18899 --data-dir ...
 `;
 
 async function main(): Promise<number> {

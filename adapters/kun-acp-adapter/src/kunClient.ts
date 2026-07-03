@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type AcpContentBlock = {
   type?: string;
@@ -106,10 +110,28 @@ type RuntimeEvent = {
   [key: string]: unknown;
 };
 
+type RuntimeLaunchInput = {
+  baseUrl: string;
+  runtimeToken: string;
+  model: string;
+  approvalPolicy?: string;
+  sandboxMode?: string;
+  runtimeCommand?: string;
+  runtimeArgs?: string[];
+};
+
+type ResolvedRuntimeLaunch = {
+  command: string;
+  args: string[];
+  usesSourceRuntime: boolean;
+};
+
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:18899';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+const DEFAULT_SOURCE_STARTUP_TIMEOUT_MS = 120_000;
 const DEFAULT_STARTUP_POLL_MS = 250;
+const KUN_SOURCE_RUNTIME_WRAPPER = fileURLToPath(new URL('../bin/kun-source-runtime.mjs', import.meta.url));
 
 export class KunRuntimeClient {
   private readonly baseUrl: string;
@@ -134,6 +156,7 @@ export class KunRuntimeClient {
   private readonly fallbackSessions = new Set<string>();
   private fallbackSessionSeq = 0;
   private runtimeStartAttempt?: Promise<void>;
+  private readonly usesSourceRuntime: boolean;
 
   constructor(options: KunRuntimeClientOptions = {}) {
     const configuredBaseUrl = options.baseUrl || process.env.KUN_RUNTIME_URL || DEFAULT_RUNTIME_URL;
@@ -144,12 +167,24 @@ export class KunRuntimeClient {
     this.approvalPolicy = options.approvalPolicy || process.env.KUN_APPROVAL_POLICY || undefined;
     this.sandboxMode = options.sandboxMode || process.env.KUN_SANDBOX_MODE || undefined;
     this.autoStartRuntime = options.autoStartRuntime ?? parseBool(process.env.KUN_RUNTIME_AUTO_START, this.baseUrl === DEFAULT_RUNTIME_URL);
-    this.runtimeCommand = options.runtimeCommand || process.env.KUN_RUNTIME_COMMAND || 'kun';
-    this.runtimeArgs =
-      options.runtimeArgs ||
-      splitArgs(process.env.KUN_RUNTIME_ARGS) ||
-      defaultRuntimeArgs(this.baseUrl);
-    this.startupTimeoutMs = options.startupTimeoutMs ?? Number(process.env.KUN_RUNTIME_STARTUP_TIMEOUT_MS || DEFAULT_STARTUP_TIMEOUT_MS);
+    const runtimeLaunch = resolveRuntimeLaunch({
+      baseUrl: this.baseUrl,
+      runtimeToken: this.runtimeToken,
+      model: this.model,
+      approvalPolicy: this.approvalPolicy,
+      sandboxMode: this.sandboxMode,
+      runtimeCommand: options.runtimeCommand,
+      runtimeArgs: options.runtimeArgs,
+    });
+    this.runtimeCommand = runtimeLaunch.command;
+    this.runtimeArgs = runtimeLaunch.args;
+    this.usesSourceRuntime = runtimeLaunch.usesSourceRuntime;
+    this.startupTimeoutMs =
+      options.startupTimeoutMs ??
+      Number(
+        process.env.KUN_RUNTIME_STARTUP_TIMEOUT_MS ||
+          (this.usesSourceRuntime ? DEFAULT_SOURCE_STARTUP_TIMEOUT_MS : DEFAULT_STARTUP_TIMEOUT_MS)
+      );
     this.startupPollMs = options.startupPollMs ?? Number(process.env.KUN_RUNTIME_STARTUP_POLL_MS || DEFAULT_STARTUP_POLL_MS);
     this.startRuntime = options.startRuntime || startDetachedRuntime;
     this.fetchImpl = options.fetchImpl || fetch;
@@ -200,7 +235,7 @@ export class KunRuntimeClient {
     }
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.5');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.6');
     }
 
     const started = await this.request<Record<string, unknown>>(`/v1/threads/${encodeURIComponent(sessionId)}/turns`, {
@@ -351,7 +386,7 @@ export class KunRuntimeClient {
   private async promptWithProviderFallback(sessionId: string, request: AcpPromptRequest): Promise<AcpPromptResponse> {
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.5');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.6');
     }
     const text = await this.providerFallback!.complete(prompt);
     if (text) {
@@ -701,16 +736,16 @@ async function parseSse(
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
+      let boundary = findSseFrameBoundary(buffer);
+      while (boundary) {
+        const frame = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
         const shouldContinue = await consumeFrame(frame, onEvent);
         if (shouldContinue === false) {
           stoppedEarly = true;
           return;
         }
-        boundary = buffer.indexOf('\n\n');
+        boundary = findSseFrameBoundary(buffer);
       }
     }
     buffer += decoder.decode();
@@ -719,6 +754,15 @@ async function parseSse(
     if (stoppedEarly) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+function findSseFrameBoundary(buffer: string): { index: number; length: number } | null {
+  const candidates = [
+    { index: buffer.indexOf('\r\n\r\n'), length: 4 },
+    { index: buffer.indexOf('\n\n'), length: 2 },
+  ].filter((candidate) => candidate.index >= 0);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((earliest, candidate) => (candidate.index < earliest.index ? candidate : earliest));
 }
 
 async function consumeFrame(
@@ -859,9 +903,152 @@ function splitArgs(raw: string | undefined): string[] | undefined {
   return trimmed.split(/\s+/);
 }
 
-function defaultRuntimeArgs(baseUrl: string): string[] {
-  const url = new URL(baseUrl);
-  return ['serve', '--host', url.hostname, '--port', url.port || defaultPortFor(url)];
+function resolveRuntimeLaunch(input: RuntimeLaunchInput): ResolvedRuntimeLaunch {
+  const explicitCommand = input.runtimeCommand || process.env.KUN_RUNTIME_COMMAND;
+  const args =
+    input.runtimeArgs ||
+    splitArgs(process.env.KUN_RUNTIME_ARGS) ||
+    defaultRuntimeArgs({
+      baseUrl: input.baseUrl,
+      runtimeToken: input.runtimeToken,
+      model: input.model,
+      approvalPolicy: input.approvalPolicy,
+      sandboxMode: input.sandboxMode,
+    });
+  if (explicitCommand) {
+    return { command: explicitCommand, args, usesSourceRuntime: false };
+  }
+  const sourceRoot = resolveKunSourceRoot();
+  if (sourceRoot) {
+    return {
+      command: process.execPath,
+      args: [KUN_SOURCE_RUNTIME_WRAPPER, '--source-dir', sourceRoot, ...args],
+      usesSourceRuntime: true,
+    };
+  }
+  return { command: 'kun', args, usesSourceRuntime: false };
+}
+
+function defaultRuntimeArgs(input: {
+  baseUrl: string;
+  runtimeToken: string;
+  model: string;
+  approvalPolicy?: string;
+  sandboxMode?: string;
+}): string[] {
+  const url = new URL(input.baseUrl);
+  const args = [
+    'serve',
+    '--host',
+    url.hostname,
+    '--port',
+    url.port || defaultPortFor(url),
+    '--data-dir',
+    defaultRuntimeDataDir(),
+  ];
+  if (input.runtimeToken) {
+    args.push('--runtime-token', input.runtimeToken);
+  } else {
+    args.push('--insecure');
+  }
+  if (input.model) args.push('--model', input.model);
+  if (input.approvalPolicy) args.push('--approval-policy', input.approvalPolicy);
+  if (input.sandboxMode) args.push('--sandbox-mode', input.sandboxMode);
+  const apiKey = injectedProviderApiKey();
+  if (apiKey) args.push('--api-key', apiKey);
+  const endpoint = injectedProviderEndpoint();
+  if (endpoint?.baseUrl) {
+    args.push('--base-url', endpoint.baseUrl);
+    if (endpoint.endpointFormat !== 'chat_completions') {
+      args.push('--endpoint-format', endpoint.endpointFormat);
+    }
+  }
+  return args;
+}
+
+function defaultRuntimeDataDir(): string {
+  const explicit = process.env.KUN_DATA_DIR || process.env.KUN_RUNTIME_DATA_DIR;
+  if (explicit?.trim()) return expandHome(explicit.trim());
+  if (process.env.NOMIFUN_DATA_DIR?.trim()) return path.join(expandHome(process.env.NOMIFUN_DATA_DIR.trim()), 'kun-runtime');
+  return path.join(homedir(), 'Library', 'Application Support', 'NomiFun', 'Nomi', 'kun-runtime');
+}
+
+function injectedProviderApiKey(): string {
+  return (
+    process.env.KUN_API_KEY ||
+    process.env.DEEPSEEK_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.API_KEY ||
+    ''
+  ).trim();
+}
+
+function injectedProviderEndpoint(): { baseUrl: string; endpointFormat: 'chat_completions' | 'responses' | 'messages' | 'custom_endpoint' } | null {
+  const baseUrl =
+    process.env.KUN_BASE_URL ||
+    process.env.OPENAI_BASE_URL ||
+    process.env.ANTHROPIC_BASE_URL ||
+    process.env.DEEPSEEK_BASE_URL ||
+    process.env.BASE_URL ||
+    '';
+  if (!baseUrl.trim()) return null;
+  const provider = (process.env.KUN_PROVIDER || process.env.PROVIDER || 'openai').trim().toLowerCase();
+  const apiPath = process.env.KUN_API_PATH || defaultProviderApiPath(provider);
+  const endpoint = stripTrailingSlash(providerEndpoint(baseUrl, apiPath));
+  const lower = endpoint.toLowerCase();
+  if (lower.endsWith('/chat/completions')) {
+    return { baseUrl: endpoint.slice(0, -'/chat/completions'.length), endpointFormat: 'chat_completions' };
+  }
+  if (lower.endsWith('/completions')) {
+    return { baseUrl: endpoint.slice(0, -'/completions'.length), endpointFormat: 'chat_completions' };
+  }
+  if (lower.endsWith('/responses')) {
+    return { baseUrl: endpoint.slice(0, -'/responses'.length), endpointFormat: 'responses' };
+  }
+  if (lower.endsWith('/messages')) {
+    return { baseUrl: endpoint.slice(0, -'/messages'.length), endpointFormat: 'messages' };
+  }
+  return { baseUrl: endpoint, endpointFormat: 'custom_endpoint' };
+}
+
+function resolveKunSourceRoot(): string | null {
+  const explicit = process.env.KUN_SOURCE_DIR?.trim();
+  if (explicit) return normalizeKunSourceRoot(explicit);
+  const cwd = process.cwd();
+  const repoWithoutCopySuffix = cwd.replace(/_副本$/, '');
+  const adapterRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const adapterRepoWithoutCopySuffix = adapterRepoRoot.replace(/_副本$/, '');
+  const candidates = [
+    path.join(cwd, 'Kun'),
+    path.join(cwd, '..', 'Kun'),
+    path.join(repoWithoutCopySuffix, 'Kun'),
+    path.join(path.dirname(cwd), '航顺AI智能体', 'Kun'),
+    path.join(path.dirname(cwd), 'Kun'),
+    path.join(adapterRepoRoot, 'Kun'),
+    path.join(adapterRepoRoot, '..', 'Kun'),
+    path.join(adapterRepoWithoutCopySuffix, 'Kun'),
+    path.join(path.dirname(adapterRepoRoot), '航顺AI智能体', 'Kun'),
+    path.join(path.dirname(adapterRepoRoot), 'Kun'),
+  ];
+  for (const candidate of candidates) {
+    const root = normalizeKunSourceRoot(candidate);
+    if (root) return root;
+  }
+  return null;
+}
+
+function normalizeKunSourceRoot(candidate: string): string | null {
+  const expanded = expandHome(candidate);
+  if (existsSync(path.join(expanded, 'kun', 'package.json'))) return expanded;
+  if (existsSync(path.join(expanded, 'package.json')) && path.basename(expanded) === 'kun') return path.dirname(expanded);
+  return null;
+}
+
+function expandHome(value: string): string {
+  if (value === '~') return homedir();
+  if (value.startsWith(`~${path.sep}`) || value.startsWith('~/')) return path.join(homedir(), value.slice(2));
+  return value;
 }
 
 function defaultPortFor(url: URL): string {
@@ -904,10 +1091,33 @@ function sleep(ms: number): Promise<void> {
 }
 
 function formatCommand(command: string, args: string[]): string {
-  return [command, ...args].map(quoteArg).join(' ');
+  const redactedArgs: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (isSecretFlag(arg)) {
+      redactedArgs.push(arg);
+      if (i + 1 < args.length) {
+        redactedArgs.push('[REDACTED_SECRET]');
+        i += 1;
+      }
+    } else if (isSecretAssignment(arg)) {
+      redactedArgs.push(`${arg.slice(0, arg.indexOf('=') + 1)}[REDACTED_SECRET]`);
+    } else {
+      redactedArgs.push(arg);
+    }
+  }
+  return [command, ...redactedArgs].map(quoteArg).join(' ');
 }
 
 function quoteArg(value: string): string {
   if (!/[\s"'`]/.test(value)) return value;
   return JSON.stringify(value);
+}
+
+function isSecretFlag(value: string): boolean {
+  return ['--api-key', '--runtime-token', '--token'].includes(value);
+}
+
+function isSecretAssignment(value: string): boolean {
+  return /^(--api-key|--runtime-token|--token)=/i.test(value);
 }

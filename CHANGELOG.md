@@ -7,6 +7,17 @@ notes at a high level rather than a complete historical log.
 
 No unreleased changes yet.
 
+## v0.1.6 - 2026-07-03
+
+- Corrected Kun Agent to require the native Kun runtime by default. Provider-only
+  fallback is now an explicit diagnostic path gated by `KUN_PROVIDER_FALLBACK=1`.
+- Added source-runtime auto-start for local Kun checkouts so HangCore can start
+  the real Kun agent loop even when no global `kun` command is installed.
+- Reused system model provider settings for the Kun runtime startup path while
+  keeping secrets redacted from adapter startup errors.
+- Improved streaming latency for CRLF-delimited SSE frames, reducing cases where
+  Windows/Node streams buffer output until the connection closes.
+
 ## v0.1.13 - 2026-07-01
 
 - Improved orchestration reliability and control: DAG node pre-configuration,
