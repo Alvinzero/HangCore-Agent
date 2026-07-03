@@ -19,8 +19,7 @@ type UpdateStatus = 'checking' | 'upToDate' | 'available' | 'downloading' | 'dow
 
 type UpdateInfo = UpdateReleaseInfo;
 
-const BAIDU_RELEASE_MIRROR_URL = 'https://pan.baidu.com/s/5GPonoJNrwJ7GciBSDgXLaA';
-const PRODUCT_WEBSITE_URL = 'https://www.nomifun.com';
+const PRODUCT_WEBSITE_URL = 'https://www.hsxp-hk.com/';
 const GITHUB_RELEASES_PAGE = 'https://github.com/Alvinzero/HangCore-Agent/releases/latest';
 
 const UpdateModal: React.FC = () => {
@@ -58,12 +57,6 @@ const UpdateModal: React.FC = () => {
     const target = releasePageUrl || GITHUB_RELEASES_PAGE;
     void ipcBridge.shell.openExternal.invoke(target).catch((error) => {
       console.error('Failed to open release page:', error);
-    });
-  };
-
-  const openBaiduReleaseMirror = () => {
-    void ipcBridge.shell.openExternal.invoke(BAIDU_RELEASE_MIRROR_URL).catch((error) => {
-      console.error('Failed to open Baidu release mirror:', error);
     });
   };
 
@@ -313,17 +306,6 @@ const UpdateModal: React.FC = () => {
     <div className={`text-12px leading-18px text-[rgb(var(--warning-6))] ${className}`}>{t('update.disclaimer')}</div>
   );
 
-  const renderBaiduManualDownloadButton = (className = '') => (
-    <Button
-      size='small'
-      onClick={openBaiduReleaseMirror}
-      icon={<Download size='14' />}
-      className={`!px-16px ${className}`}
-    >
-      {t('settings.baiduManualDownload')}
-    </Button>
-  );
-
   const renderContent = () => {
     switch (status) {
       case 'checking':
@@ -334,7 +316,6 @@ const UpdateModal: React.FC = () => {
               <div className='absolute inset-0 border-3 border-primary border-t-transparent rounded-full animate-spin' />
             </div>
             <div className='text-15px text-t-primary font-500'>{t('update.checking')}</div>
-            <div className='mt-16px'>{renderBaiduManualDownloadButton()}</div>
           </div>
         );
 
@@ -348,7 +329,6 @@ const UpdateModal: React.FC = () => {
             <div className='text-13px text-t-tertiary'>
               {t('update.currentVersion', { version: currentVersion || '-' })}
             </div>
-            <div className='mt-16px'>{renderBaiduManualDownloadButton()}</div>
           </div>
         );
 
@@ -385,7 +365,6 @@ const UpdateModal: React.FC = () => {
                     {t('update.downloadButton')}
                   </Button>
                 )}
-                {renderBaiduManualDownloadButton()}
               </div>
             </div>
 
@@ -397,17 +376,6 @@ const UpdateModal: React.FC = () => {
 
             <div className='mx-24px mt-12px px-12px py-10px rounded-8px border border-solid border-[rgba(var(--primary-6),0.16)] bg-[rgba(var(--primary-6),0.06)] text-12px leading-18px text-t-secondary'>
               <div>{t('update.downloadSourceHint')}</div>
-              <div className='mt-4px'>
-                {t('update.baiduMirrorHint')}{' '}
-                <button
-                  type='button'
-                  onClick={openBaiduReleaseMirror}
-                  title={BAIDU_RELEASE_MIRROR_URL}
-                  className='cursor-pointer border-0 bg-transparent p-0 text-12px leading-18px text-[rgb(var(--primary-6))] underline-offset-2 hover:underline'
-                >
-                  {t('update.baiduMirrorLink')}
-                </button>
-              </div>
               <div className='mt-4px'>
                 {t('update.productWebsiteHint')}{' '}
                 <button
@@ -457,7 +425,6 @@ const UpdateModal: React.FC = () => {
                 <span className='text-[rgb(var(--primary-6))] font-500'>{progress.speed}</span>
               </div>
             </div>
-            <div className='mt-16px'>{renderBaiduManualDownloadButton()}</div>
           </div>
         );
 
@@ -481,7 +448,6 @@ const UpdateModal: React.FC = () => {
               >
                 {t('update.installNow')}
               </Button>
-              {renderBaiduManualDownloadButton()}
             </div>
           </div>
         );
@@ -503,7 +469,6 @@ const UpdateModal: React.FC = () => {
               <Button type='primary' size='small' onClick={openFile} className='!px-16px'>
                 {t('update.openFile')}
               </Button>
-              {renderBaiduManualDownloadButton()}
             </div>
           </div>
         );
@@ -523,7 +488,6 @@ const UpdateModal: React.FC = () => {
               <Button type='primary' size='small' onClick={openReleasePage} className='!px-16px'>
                 {t('update.goToRelease')}
               </Button>
-              {renderBaiduManualDownloadButton()}
               <Button size='small' onClick={openProductWebsite} className='!px-16px'>
                 {t('update.productWebsiteLink')}
               </Button>

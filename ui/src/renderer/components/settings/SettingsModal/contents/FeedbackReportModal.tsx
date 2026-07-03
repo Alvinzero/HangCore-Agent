@@ -15,13 +15,12 @@ import { useTranslation } from 'react-i18next';
 
 export const NOMIFUN_PUBLIC_LINKS = {
   repository: 'https://github.com/Alvinzero/HangCore-Agent',
-  officialWebsite: 'https://github.com/Alvinzero/HangCore-Agent',
-  contact: 'https://github.com/Alvinzero/HangCore-Agent/issues',
+  officialWebsite: 'https://www.hsxp-hk.com/',
+  contact: 'https://www.hsxp-hk.com/',
   issues: 'https://github.com/Alvinzero/HangCore-Agent/issues',
   releases: 'https://github.com/Alvinzero/HangCore-Agent/releases',
-  baiduPan: 'https://pan.baidu.com/s/5GPonoJNrwJ7GciBSDgXLaA',
-  email: '535526063@qq.com',
-  emailHref: 'mailto:535526063@qq.com',
+  email: '',
+  emailHref: '',
 } as const;
 
 const COPYRIGHT = '© 2026 HangCore Agent';
@@ -54,8 +53,6 @@ const CONTACT_ITEMS = [
     value: NOMIFUN_PUBLIC_LINKS.email,
     url: NOMIFUN_PUBLIC_LINKS.emailHref,
     copyValue: NOMIFUN_PUBLIC_LINKS.email,
-    trailingKey: 'settings.contactEmailPending',
-    trailingFallback: '、（待补充中）……',
   },
 ] as const;
 
@@ -89,6 +86,7 @@ const FeedbackReportModal: React.FC<FeedbackReportModalProps> = ({ visible, onCa
   }, []);
 
   const openContactTarget = useCallback((url: string) => {
+    if (!url) return;
     void openExternalUrl(url).catch((e) => console.error('open contact target failed', e));
   }, []);
 
@@ -111,40 +109,49 @@ const FeedbackReportModal: React.FC<FeedbackReportModalProps> = ({ visible, onCa
           {t('settings.contactDescription')}
         </p>
         <div className='mt-16px overflow-hidden rd-10px border border-border-2 bg-bg-1'>
-          {CONTACT_ITEMS.map((item) => (
-            <div
-              key={item.labelKey}
-              className='group flex min-h-48px items-center gap-12px border-b border-border-2 px-14px py-10px last:border-b-0 hover:bg-fill-1'
-            >
-              <div className='w-88px shrink-0 text-13px font-500 text-t-primary'>
-                {t(item.labelKey, item.fallbackLabel)}
-              </div>
-              <button
-                type='button'
-                className='min-w-0 flex-1 border-0 bg-transparent p-0 text-left text-13px leading-19px text-t-secondary transition-colors hover:text-primary-6'
-                onClick={() => openContactTarget(item.url)}
+          {CONTACT_ITEMS.map((item) => {
+            const hasValue = Boolean(item.value);
+            const hasUrl = Boolean(item.url);
+
+            return (
+              <div
+                key={item.labelKey}
+                className='group flex min-h-48px items-center gap-12px border-b border-border-2 px-14px py-10px last:border-b-0 hover:bg-fill-1'
               >
-                <span className='break-all'>
-                  {item.value}
-                  {'trailingKey' in item ? t(item.trailingKey, item.trailingFallback) : ''}
-                </span>
-              </button>
-              <CopyIconButton
-                text={item.copyValue}
-                className='h-26px w-26px shrink-0 opacity-70 hover:bg-fill-2 group-hover:opacity-100'
-              />
-              <Tooltip content={t('settings.openLink', '打开链接')} position='top' mini>
+                <div className='w-88px shrink-0 text-13px font-500 text-t-primary'>
+                  {t(item.labelKey, item.fallbackLabel)}
+                </div>
                 <button
                   type='button'
-                  aria-label={t('settings.openLink', '打开链接')}
-                  className='inline-flex h-26px w-26px shrink-0 items-center justify-center rd-4px border-0 bg-transparent p-0 text-t-tertiary opacity-70 transition-colors hover:bg-fill-2 hover:text-t-primary group-hover:opacity-100'
+                  disabled={!hasUrl}
+                  className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-left text-13px leading-19px text-t-secondary transition-colors ${
+                    hasUrl ? 'hover:text-primary-6' : 'cursor-default'
+                  }`}
                   onClick={() => openContactTarget(item.url)}
                 >
-                  <Link theme='outline' size='14' fill='currentColor' />
+                  <span className='break-all'>{item.value}</span>
                 </button>
-              </Tooltip>
-            </div>
-          ))}
+                {hasValue && (
+                  <CopyIconButton
+                    text={item.copyValue}
+                    className='h-26px w-26px shrink-0 opacity-70 hover:bg-fill-2 group-hover:opacity-100'
+                  />
+                )}
+                {hasUrl && (
+                  <Tooltip content={t('settings.openLink', '打开链接')} position='top' mini>
+                    <button
+                      type='button'
+                      aria-label={t('settings.openLink', '打开链接')}
+                      className='inline-flex h-26px w-26px shrink-0 items-center justify-center rd-4px border-0 bg-transparent p-0 text-t-tertiary opacity-70 transition-colors hover:bg-fill-2 hover:text-t-primary group-hover:opacity-100'
+                      onClick={() => openContactTarget(item.url)}
+                    >
+                      <Link theme='outline' size='14' fill='currentColor' />
+                    </button>
+                  </Tooltip>
+                )}
+              </div>
+            );
+          })}
         </div>
         <div className='mt-12px text-center text-12px text-t-tertiary'>{COPYRIGHT}</div>
       </div>

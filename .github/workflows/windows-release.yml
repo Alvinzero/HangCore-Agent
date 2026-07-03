@@ -25,6 +25,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       HANGCORE_REPO: Alvinzero/HangCore-Agent
+      NOMIFUN_EMBED_BUN: "1"
 
     steps:
       - name: Checkout

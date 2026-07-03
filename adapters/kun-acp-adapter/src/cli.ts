@@ -40,6 +40,9 @@ Environment:
   KUN_RUNTIME_URL    Kun HTTP/SSE runtime URL. Default: http://127.0.0.1:18899
   KUN_RUNTIME_TOKEN  Bearer token for Kun runtime, if Kun was started with one
   KUN_THREAD_MODEL   Kun thread model used when the ACP session creates a Kun thread
+  KUN_RUNTIME_AUTO_START  Auto-start local Kun runtime when default URL is unreachable. Set 0 to disable
+  KUN_RUNTIME_COMMAND     Runtime command for auto-start. Default: kun
+  KUN_RUNTIME_ARGS        Runtime args for auto-start. Default: serve --host 127.0.0.1 --port 18899
 `;
 
 async function main(): Promise<number> {

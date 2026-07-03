@@ -16,11 +16,10 @@ describe('public contact links', () => {
     const combined = `${aboutSource}\n${contactSource}`;
 
     for (const target of [
-      'https://www.nomifun.com',
-      'https://www.nomifun.com/contact',
+      'https://www.hsxp-hk.com/',
+      'https://github.com/Alvinzero/HangCore-Agent',
       'https://github.com/Alvinzero/HangCore-Agent/issues',
       'https://github.com/Alvinzero/HangCore-Agent/releases',
-      '535526063@qq.com',
     ]) {
       expect(combined.includes(target)).toBe(true);
     }
@@ -28,15 +27,29 @@ describe('public contact links', () => {
     expect(aboutSource.includes('ABOUT_LINK_TARGET')).toBe(false);
   });
 
-  test('keeps the Baidu manual installer link visible beside update checks', () => {
+  test('keeps the public contact email empty', () => {
+    const aboutSource = readSource(new URL('./AboutModalContent.tsx', import.meta.url));
+    const contactSource = readSource(new URL('./FeedbackReportModal.tsx', import.meta.url));
+    const combined = `${aboutSource}\n${contactSource}`;
+
+    expect(contactSource.includes("email: ''")).toBe(true);
+    expect(contactSource.includes("emailHref: ''")).toBe(true);
+    expect(aboutSource.includes('settings.contactEmailPending')).toBe(false);
+    expect(contactSource.includes('settings.contactEmailPending')).toBe(false);
+    expect(combined.includes('535526063@qq.com')).toBe(false);
+    expect(combined.includes('mailto:535526063@qq.com')).toBe(false);
+  });
+
+  test('does not expose the Baidu manual installer link in update surfaces', () => {
     const aboutSource = readSource(new URL('./AboutModalContent.tsx', import.meta.url));
     const contactSource = readSource(new URL('./FeedbackReportModal.tsx', import.meta.url));
     const updateModalSource = readSource(new URL('../../UpdateModal.tsx', import.meta.url));
 
-    expect(contactSource.includes("baiduPan: 'https://pan.baidu.com/s/5GPonoJNrwJ7GciBSDgXLaA'")).toBe(true);
-    expect(aboutSource.includes('NOMIFUN_PUBLIC_LINKS.baiduPan')).toBe(true);
-    expect(aboutSource.includes('settings.baiduManualDownload')).toBe(true);
-    expect(updateModalSource.includes('settings.baiduManualDownload')).toBe(true);
+    for (const source of [aboutSource, contactSource, updateModalSource]) {
+      expect(source.includes('pan.baidu.com')).toBe(false);
+      expect(source.includes('baiduManualDownload')).toBe(false);
+      expect(source.includes('baiduMirror')).toBe(false);
+    }
   });
 
   test('keeps the Contact modal visually quiet instead of rendering chunky cards', () => {

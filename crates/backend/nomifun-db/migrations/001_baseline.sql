@@ -420,7 +420,7 @@ VALUES
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
     ('agent_builtin_kun', NULL, 'Kun Agent',
-     'kun', 'acp', 'builtin', '{"binary_name":"kun-acp-adapter"}',
+     'kun', 'acp', 'builtin', '{"binary_name":"kun-acp-adapter","bridge_binary":"bun"}',
      1, 'kun-acp-adapter', '["--stdio"]', '[]',
      '[".kun/skills"]',
      '{"supports_side_question":false,"supports_team":true}',

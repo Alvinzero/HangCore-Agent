@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+
 export type AcpContentBlock = {
   type?: string;
   text?: string;
@@ -20,6 +22,12 @@ export type AcpSessionUpdate = {
   update: Record<string, unknown>;
 };
 
+export type KunRuntimeLaunch = {
+  baseUrl: string;
+  command: string;
+  args: string[];
+};
+
 export interface KunRuntimeClientOptions {
   baseUrl?: string;
   runtimeToken?: string;
@@ -27,6 +35,12 @@ export interface KunRuntimeClientOptions {
   title?: string;
   approvalPolicy?: string;
   sandboxMode?: string;
+  autoStartRuntime?: boolean;
+  runtimeCommand?: string;
+  runtimeArgs?: string[];
+  startupTimeoutMs?: number;
+  startupPollMs?: number;
+  startRuntime?: (launch: KunRuntimeLaunch) => Promise<void> | void;
   fetchImpl?: typeof fetch;
   onSessionUpdate?: (update: AcpSessionUpdate) => Promise<void> | void;
 }
@@ -45,6 +59,8 @@ type RuntimeEvent = {
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:18899';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
+const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+const DEFAULT_STARTUP_POLL_MS = 250;
 
 export class KunRuntimeClient {
   private readonly baseUrl: string;
@@ -53,18 +69,35 @@ export class KunRuntimeClient {
   private readonly title: string;
   private readonly approvalPolicy?: string;
   private readonly sandboxMode?: string;
+  private readonly autoStartRuntime: boolean;
+  private readonly runtimeCommand: string;
+  private readonly runtimeArgs: string[];
+  private readonly startupTimeoutMs: number;
+  private readonly startupPollMs: number;
+  private readonly startRuntime: (launch: KunRuntimeLaunch) => Promise<void> | void;
   private readonly fetchImpl: typeof fetch;
   private readonly onSessionUpdate?: (update: AcpSessionUpdate) => Promise<void> | void;
   private readonly lastSeqByThread = new Map<string, number>();
   private readonly activeTurns = new Map<string, { turnId: string; abort: AbortController }>();
+  private runtimeStartAttempt?: Promise<void>;
 
   constructor(options: KunRuntimeClientOptions = {}) {
-    this.baseUrl = stripTrailingSlash(options.baseUrl || process.env.KUN_RUNTIME_URL || DEFAULT_RUNTIME_URL);
+    const configuredBaseUrl = options.baseUrl || process.env.KUN_RUNTIME_URL || DEFAULT_RUNTIME_URL;
+    this.baseUrl = stripTrailingSlash(configuredBaseUrl);
     this.runtimeToken = options.runtimeToken || process.env.KUN_RUNTIME_TOKEN || '';
     this.model = options.model || process.env.KUN_THREAD_MODEL || process.env.KUN_MODEL || DEFAULT_MODEL;
     this.title = options.title || 'HangCore ACP';
     this.approvalPolicy = options.approvalPolicy || process.env.KUN_APPROVAL_POLICY || undefined;
     this.sandboxMode = options.sandboxMode || process.env.KUN_SANDBOX_MODE || undefined;
+    this.autoStartRuntime = options.autoStartRuntime ?? parseBool(process.env.KUN_RUNTIME_AUTO_START, this.baseUrl === DEFAULT_RUNTIME_URL);
+    this.runtimeCommand = options.runtimeCommand || process.env.KUN_RUNTIME_COMMAND || 'kun';
+    this.runtimeArgs =
+      options.runtimeArgs ||
+      splitArgs(process.env.KUN_RUNTIME_ARGS) ||
+      defaultRuntimeArgs(this.baseUrl);
+    this.startupTimeoutMs = options.startupTimeoutMs ?? Number(process.env.KUN_RUNTIME_STARTUP_TIMEOUT_MS || DEFAULT_STARTUP_TIMEOUT_MS);
+    this.startupPollMs = options.startupPollMs ?? Number(process.env.KUN_RUNTIME_STARTUP_POLL_MS || DEFAULT_STARTUP_POLL_MS);
+    this.startRuntime = options.startRuntime || startDetachedRuntime;
     this.fetchImpl = options.fetchImpl || fetch;
     this.onSessionUpdate = options.onSessionUpdate;
   }
@@ -130,7 +163,15 @@ export class KunRuntimeClient {
   }
 
   private async health(): Promise<void> {
-    await this.request('/health', { method: 'GET', auth: false });
+    try {
+      await this.request('/health', { method: 'GET', auth: false });
+    } catch (error) {
+      if (!this.autoStartRuntime || !isRuntimeUnreachable(error)) {
+        throw error;
+      }
+      await this.ensureRuntimeStarted(error);
+      await this.waitForHealth(error);
+    }
   }
 
   private async consumeEvents(
@@ -186,16 +227,53 @@ export class KunRuntimeClient {
         signal: init.signal,
       });
     } catch (error) {
-      throw new Error(
+      const wrapped = new Error(
         `Kun runtime is not reachable at ${this.baseUrl}. Start Kun with \`kun serve --host 127.0.0.1 --port 18899\` or set KUN_RUNTIME_URL.`,
         { cause: error }
       );
+      (wrapped as Error & { code?: string }).code = 'KUN_RUNTIME_UNREACHABLE';
+      throw wrapped;
     }
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`Kun runtime ${init.method} ${path} failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
     }
     return response;
+  }
+
+  private async ensureRuntimeStarted(cause: unknown): Promise<void> {
+    if (!this.runtimeStartAttempt) {
+      const launch = { baseUrl: this.baseUrl, command: this.runtimeCommand, args: this.runtimeArgs };
+      this.runtimeStartAttempt = Promise.resolve()
+        .then(() => this.startRuntime(launch))
+        .catch((error) => {
+          this.runtimeStartAttempt = undefined;
+          throw new Error(
+            `Kun runtime is not reachable at ${this.baseUrl}. Auto-start failed with \`${formatCommand(launch.command, launch.args)}\`: ${errorMessage(error)}`,
+            { cause: error || cause }
+          );
+        });
+    }
+    await this.runtimeStartAttempt;
+  }
+
+  private async waitForHealth(cause: unknown): Promise<void> {
+    const deadline = Date.now() + Math.max(1, this.startupTimeoutMs);
+    let lastError: unknown = cause;
+    while (Date.now() <= deadline) {
+      await sleep(Math.max(1, this.startupPollMs));
+      try {
+        await this.request('/health', { method: 'GET', auth: false });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw new Error(
+      `Kun runtime auto-started with \`${formatCommand(this.runtimeCommand, this.runtimeArgs)}\`, but ${this.baseUrl}/health was not ready within ${this.startupTimeoutMs}ms. Last error: ${errorMessage(lastError)}`,
+      { cause: lastError }
+    );
   }
 }
 
@@ -376,4 +454,68 @@ function stringField(source: unknown, keys: string[]): string | undefined {
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function parseBool(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined) return fallback;
+  return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
+}
+
+function splitArgs(raw: string | undefined): string[] | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.split(/\s+/);
+}
+
+function defaultRuntimeArgs(baseUrl: string): string[] {
+  const url = new URL(baseUrl);
+  return ['serve', '--host', url.hostname, '--port', url.port || defaultPortFor(url)];
+}
+
+function defaultPortFor(url: URL): string {
+  if (url.protocol === 'https:') return '443';
+  return '80';
+}
+
+async function startDetachedRuntime(launch: KunRuntimeLaunch): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const child = spawn(launch.command, launch.args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+function isRuntimeUnreachable(error: unknown): boolean {
+  return (error as { code?: unknown })?.code === 'KUN_RUNTIME_UNREACHABLE';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatCommand(command: string, args: string[]): string {
+  return [command, ...args].map(quoteArg).join(' ');
+}
+
+function quoteArg(value: string): string {
+  if (!/[\s"'`]/.test(value)) return value;
+  return JSON.stringify(value);
 }

@@ -9,7 +9,7 @@ INSERT OR IGNORE INTO agent_metadata
      sort_order, created_at, updated_at)
 VALUES
     ('agent_builtin_kun', NULL, 'Kun Agent',
-     'kun', 'acp', 'builtin', '{"binary_name":"kun-acp-adapter"}',
+     'kun', 'acp', 'builtin', '{"binary_name":"kun-acp-adapter","bridge_binary":"bun"}',
      1, 'kun-acp-adapter', '["--stdio"]', '[]',
      '[".kun/skills"]',
      '{"supports_side_question":false,"supports_team":true}',

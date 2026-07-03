@@ -6,7 +6,7 @@
  */
 
 import { Divider, Typography, Button } from '@arco-design/web-react';
-import { Download, Github, Refresh, Right } from '@icon-park/react';
+import { Github, Refresh, Right } from '@icon-park/react';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import classNames from 'classnames';
@@ -49,6 +49,7 @@ const AboutModalContent: React.FC = () => {
   }, []);
 
   const openLink = async (url: string) => {
+    if (!url) return;
     try {
       await openExternalUrl(url);
     } catch (error) {
@@ -65,8 +66,8 @@ const AboutModalContent: React.FC = () => {
   const linkItems: LinkItem[] = [
     {
       title: t('settings.helpDocumentation'),
-      detail: NOMIFUN_PUBLIC_LINKS.officialWebsite,
-      url: NOMIFUN_PUBLIC_LINKS.officialWebsite,
+      detail: NOMIFUN_PUBLIC_LINKS.repository,
+      url: NOMIFUN_PUBLIC_LINKS.repository,
       icon: <Right theme='outline' size='16' />,
     },
     {
@@ -95,7 +96,7 @@ const AboutModalContent: React.FC = () => {
     },
     {
       title: t('settings.contactEmail'),
-      detail: `${NOMIFUN_PUBLIC_LINKS.email}${t('settings.contactEmailPending')}`,
+      detail: NOMIFUN_PUBLIC_LINKS.email,
       url: NOMIFUN_PUBLIC_LINKS.emailHref,
       icon: <Right theme='outline' size='16' />,
     },
@@ -140,20 +141,9 @@ const AboutModalContent: React.FC = () => {
                   type='primary'
                   onClick={checkUpdate}
                   icon={<Refresh theme='outline' size='14' />}
-                  className='min-w-120px flex-1 !px-12px'
+                  className='min-w-120px !px-16px'
                 >
                   {t('settings.checkForUpdates')}
-                </Button>
-                <Button
-                  onClick={() =>
-                    openLink(NOMIFUN_PUBLIC_LINKS.baiduPan).catch((error) =>
-                      console.error('Failed to open Baidu manual download:', error)
-                    )
-                  }
-                  icon={<Download theme='outline' size='14' />}
-                  className='min-w-144px flex-1 !px-12px'
-                >
-                  {t('settings.baiduManualDownload')}
                 </Button>
               </div>
             )}
@@ -165,27 +155,39 @@ const AboutModalContent: React.FC = () => {
           {/* Links Section */}
           <div className='flex flex-col gap-4px pt-8px'>
             {linkItems.map((item, index) => (
-              <div
-                key={index}
-                className='flex items-center justify-between px-16px py-12px rd-8px hover:bg-fill-2 transition-all cursor-pointer group'
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (item.onClick) {
-                    item.onClick();
-                  } else {
-                    openLink(item.url).catch((error) => console.error('Failed to open link:', error));
-                  }
-                }}
-              >
-                <div className='min-w-0 pr-12px'>
-                  <Typography.Text className='block text-14px text-t-primary'>{item.title}</Typography.Text>
-                  <Typography.Text className='block break-all text-12px leading-18px text-t-secondary'>
-                    {item.detail}
-                  </Typography.Text>
-                </div>
-                <div className='text-t-secondary group-hover:text-t-primary transition-colors'>{item.icon}</div>
-              </div>
+              (() => {
+                const targetUrl = 'url' in item ? item.url : '';
+                const isInteractive = Boolean(item.onClick || targetUrl);
+
+                return (
+                  <div
+                    key={index}
+                    className={classNames(
+                      'flex items-center justify-between px-16px py-12px rd-8px transition-all group',
+                      isInteractive ? 'cursor-pointer hover:bg-fill-2' : 'cursor-default'
+                    )}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (item.onClick) {
+                        item.onClick();
+                      } else if (targetUrl) {
+                        openLink(targetUrl).catch((error) => console.error('Failed to open link:', error));
+                      }
+                    }}
+                  >
+                    <div className='min-w-0 pr-12px'>
+                      <Typography.Text className='block text-14px text-t-primary'>{item.title}</Typography.Text>
+                      <Typography.Text className='block break-all text-12px leading-18px text-t-secondary'>
+                        {item.detail}
+                      </Typography.Text>
+                    </div>
+                    {isInteractive && (
+                      <div className='text-t-secondary group-hover:text-t-primary transition-colors'>{item.icon}</div>
+                    )}
+                  </div>
+                );
+              })()
             ))}
           </div>
         </div>

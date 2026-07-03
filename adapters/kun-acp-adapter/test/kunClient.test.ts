@@ -57,11 +57,47 @@ describe('KunRuntimeClient', () => {
   test('explains how to start Kun when the runtime is unreachable', async () => {
     const client = new KunRuntimeClient({
       baseUrl: 'http://127.0.0.1:9',
+      autoStartRuntime: false,
     });
 
     await expect(client.createSession({ cwd: '/tmp/project' })).rejects.toThrow(
       'Kun runtime is not reachable at http://127.0.0.1:9. Start Kun with `kun serve --host 127.0.0.1 --port 18899` or set KUN_RUNTIME_URL.'
     );
+  });
+
+  test('auto-starts Kun runtime when health is unreachable before creating a session', async () => {
+    let online = false;
+    let healthAttempts = 0;
+    let startCalls = 0;
+    const client = new KunRuntimeClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      startupPollMs: 1,
+      startupTimeoutMs: 50,
+      startRuntime: async ({ command, args }) => {
+        startCalls += 1;
+        expect(command).toBe('kun');
+        expect(args).toEqual(['serve', '--host', '127.0.0.1', '--port', '18899']);
+        online = true;
+      },
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/health') {
+          healthAttempts += 1;
+          if (!online) throw new Error('connection refused');
+          return Response.json({ status: 'ok' });
+        }
+        if (url.pathname === '/v1/threads' && init?.method === 'POST') {
+          return Response.json({ id: 'thread-auto-started' }, { status: 201 });
+        }
+        return Response.json({ message: 'not found' }, { status: 404 });
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+
+    expect(session.sessionId).toBe('thread-auto-started');
+    expect(startCalls).toBe(1);
+    expect(healthAttempts).toBeGreaterThanOrEqual(2);
   });
 
   test('creates a Kun thread and streams Kun loop output for an ACP prompt', async () => {
