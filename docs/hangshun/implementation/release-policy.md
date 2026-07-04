@@ -11,7 +11,7 @@
 - 每次发布必须包含 Windows `.exe`、对应 `.exe.sig` 和 `latest.json`。
 - `latest.json` 必须指向 `Alvinzero/HangCore-Agent` 仓库的 Release 资产。
 - Tauri updater 私钥只保存在 GitHub Secrets，不提交到仓库。
-- 与当前模块无关的旧 AionUi、旧 Kun、spec-kit 源码包和构建残留不得进入仓库和安装包。
+- 与当前模块无关的旧 AionUi、spec-kit 源码包和构建残留不得进入仓库和安装包；Kun runtime 只能以明确的受管运行时资源进入安装包，不得混入 nomiFun core。
 
 ## 2. 模块完成定义
 
@@ -78,8 +78,9 @@
 | `v0.1.3` | Skills 中文友好显示与搜索 | 已并入后续发布 | Guid 抽屉和 Skills Hub 中内置 Skills 名称、描述、标签中文化，运行时 Skill id 保持不变。 |
 | `v0.1.4` | Kun Agent 模型服务商复用与 provider fallback | 用户手动发布 | Kun Agent 复用系统设置里的第三方模型服务商配置；曾允许 runtime / 命令不可用时走注入 provider fallback。 |
 | `v0.1.5` | Kun runtime 协议映射增强 | 已发布 | `kun-acp-adapter` 使用 Kun 原 HTTP/SSE runtime 契约并补齐 ACP permission、Kun approval/user-input 回填、tool lifecycle 映射和 adapter 设计文档；但 provider fallback 默认可绕过 Kun Agent loop，需要后续纠偏。 |
-| `v0.1.6` | Kun runtime 真实链路纠偏 | 发布准备中 | provider fallback 改为显式诊断模式；adapter 自动发现 Kun 源码 runtime 并复用系统模型服务商配置启动真实 runtime；CRLF SSE frame 边界兼容以降低流式输出缓冲延迟。 |
+| `v0.1.6` | Kun runtime 真实链路纠偏 | 已发布 | provider fallback 改为显式诊断模式；adapter 自动发现 Kun 源码 runtime 并复用系统模型服务商配置启动真实 runtime；CRLF SSE frame 边界兼容以降低流式输出缓冲延迟。 |
+| `v0.1.7` | 受管 Kun runtime 内嵌 | 发布准备中 | Windows 安装包准备并携带受管 Kun runtime，adapter 优先启动该 runtime，修正 Windows 默认 Kun 数据目录，避免用户手动安装或启动全局 `kun` 命令。 |
 
 ## 6. 下一版本候选
 
-- `v0.1.7`: CodingTask + SpecArtifact 最小结构化保存。
+- `v0.1.8`: CodingTask + SpecArtifact 最小结构化保存。

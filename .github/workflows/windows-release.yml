@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.6"
+        default: "0.1.7"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.6 corrects Kun Agent to require the native Kun runtime by default, auto-starts a discovered Kun source runtime, and speeds up CRLF SSE streaming."
+        default: "HangCore Agent v0.1.7 bundles a managed Kun runtime for Windows installs, removes the need for a global kun command, and fixes the default Windows Kun data directory."
   push:
     tags:
       - "v*.*.*"
@@ -26,12 +26,21 @@ jobs:
       CARGO_TERM_COLOR: always
       HANGCORE_REPO: Alvinzero/HangCore-Agent
       NOMIFUN_EMBED_BUN: "1"
+      KUN_MANAGED_REF: 77fd5e38fe09c974ec38fddc6215aef57573c59a
+      KUN_MANAGED_SOURCE_DIR: .managed-runtime-build/Kun
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Checkout managed Kun runtime source
+        uses: actions/checkout@v4
+        with:
+          repository: KunAgent/Kun
+          ref: ${{ env.KUN_MANAGED_REF }}
+          path: .managed-runtime-build/Kun
 
       - name: Resolve release metadata
         id: release
@@ -81,6 +90,9 @@ jobs:
 
       - name: Build UI dist for Tauri checks
         run: bun run build:ui
+
+      - name: Prepare managed Kun runtime
+        run: bun scripts/prepare-kun-managed-runtime.mjs
 
       - name: Check Rust workspace
         run: cargo check --workspace

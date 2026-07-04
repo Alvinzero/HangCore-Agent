@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { startStdio } from './acpServer';
 
-const VERSION = '0.1.6';
+const VERSION = '0.1.7';
 
 type CliOptions = {
   stdio: boolean;

@@ -235,7 +235,7 @@ export class KunRuntimeClient {
     }
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.6');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.7');
     }
 
     const started = await this.request<Record<string, unknown>>(`/v1/threads/${encodeURIComponent(sessionId)}/turns`, {
@@ -386,7 +386,7 @@ export class KunRuntimeClient {
   private async promptWithProviderFallback(sessionId: string, request: AcpPromptRequest): Promise<AcpPromptResponse> {
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.6');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.7');
     }
     const text = await this.providerFallback!.complete(prompt);
     if (text) {
@@ -970,7 +970,15 @@ function defaultRuntimeDataDir(): string {
   const explicit = process.env.KUN_DATA_DIR || process.env.KUN_RUNTIME_DATA_DIR;
   if (explicit?.trim()) return expandHome(explicit.trim());
   if (process.env.NOMIFUN_DATA_DIR?.trim()) return path.join(expandHome(process.env.NOMIFUN_DATA_DIR.trim()), 'kun-runtime');
-  return path.join(homedir(), 'Library', 'Application Support', 'NomiFun', 'Nomi', 'kun-runtime');
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA?.trim() || path.join(homedir(), 'AppData', 'Local');
+    return path.win32.join(localAppData, 'NomiFun', 'Nomi', 'kun-runtime');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Application Support', 'NomiFun', 'Nomi', 'kun-runtime');
+  }
+  const xdgDataHome = process.env.XDG_DATA_HOME?.trim() || path.join(homedir(), '.local', 'share');
+  return path.join(xdgDataHome, 'NomiFun', 'Nomi', 'kun-runtime');
 }
 
 function injectedProviderApiKey(): string {
@@ -1015,6 +1023,10 @@ function injectedProviderEndpoint(): { baseUrl: string; endpointFormat: 'chat_co
 function resolveKunSourceRoot(): string | null {
   const explicit = process.env.KUN_SOURCE_DIR?.trim();
   if (explicit) return normalizeKunSourceRoot(explicit);
+  for (const candidate of managedKunRuntimeCandidates()) {
+    const root = normalizeKunSourceRoot(candidate);
+    if (root) return root;
+  }
   const cwd = process.cwd();
   const repoWithoutCopySuffix = cwd.replace(/_副本$/, '');
   const adapterRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -1038,10 +1050,36 @@ function resolveKunSourceRoot(): string | null {
   return null;
 }
 
+function managedKunRuntimeCandidates(): string[] {
+  const candidates: string[] = [];
+  const explicit = process.env.HANGCORE_MANAGED_KUN_RUNTIME_DIR?.trim();
+  if (explicit) candidates.push(explicit);
+
+  const adapterRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const adapterPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const cwd = process.cwd();
+  const rel = path.join('managed-runtimes', 'kun');
+  const encodedRel = path.join('_up_', '_up_', rel);
+  candidates.push(
+    path.join(cwd, rel),
+    path.join(cwd, 'resources', rel),
+    path.join(cwd, 'resources', encodedRel),
+    path.join(cwd, 'Resources', rel),
+    path.join(cwd, 'Resources', encodedRel),
+    path.join(adapterRepoRoot, rel),
+    path.join(adapterRepoRoot, 'resources', rel),
+    path.join(adapterRepoRoot, 'resources', encodedRel),
+    path.join(adapterRepoRoot, 'Resources', rel),
+    path.join(adapterRepoRoot, 'Resources', encodedRel),
+    path.join(adapterPackageRoot, '..', '..', rel)
+  );
+  return candidates;
+}
+
 function normalizeKunSourceRoot(candidate: string): string | null {
   const expanded = expandHome(candidate);
-  if (existsSync(path.join(expanded, 'kun', 'package.json'))) return expanded;
-  if (existsSync(path.join(expanded, 'package.json')) && path.basename(expanded) === 'kun') return path.dirname(expanded);
+  if (existsSync(path.join(expanded, 'kun', 'package.json'))) return path.resolve(expanded);
+  if (existsSync(path.join(expanded, 'package.json')) && path.basename(expanded) === 'kun') return path.dirname(path.resolve(expanded));
   return null;
 }
 

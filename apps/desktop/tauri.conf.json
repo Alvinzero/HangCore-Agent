@@ -6,7 +6,7 @@
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "bun run --filter=./ui dev",
-    "beforeBuildCommand": "bun scripts/prune-build.mjs --pre && bun run --filter=./ui build"
+    "beforeBuildCommand": "bun scripts/prune-build.mjs --pre && bun scripts/prepare-kun-managed-runtime.mjs && bun run --filter=./ui build"
   },
   "app": {
     "windows": [],
@@ -21,7 +21,8 @@
     "resources": [
       "../../ui/dist",
       "../../adapters/kun-acp-adapter/bin",
-      "../../adapters/kun-acp-adapter/src"
+      "../../adapters/kun-acp-adapter/src",
+      "../../managed-runtimes/kun"
     ],
     "icon": [
       "icons/32x32.png",

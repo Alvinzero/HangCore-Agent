@@ -5,7 +5,12 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
-No unreleased changes yet.
+- Bundle a managed Kun runtime for Windows packages so Kun Agent no longer
+  requires a globally installed `kun` command on clean user machines.
+- Prefer the managed runtime during adapter auto-start while preserving
+  `KUN_SOURCE_DIR`, custom runtime command, and global `kun` overrides.
+- Fix the default Windows Kun runtime data directory to use
+  `%LOCALAPPDATA%\NomiFun\Nomi\kun-runtime` instead of a macOS-style path.
 
 ## v0.1.6 - 2026-07-03
 

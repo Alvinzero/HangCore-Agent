@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { KunRuntimeClient } from '../src/kunClient';
 
 const servers: Array<{ stop: () => Promise<void> }> = [];
@@ -14,10 +14,14 @@ const envKeys = [
   'KUN_MODEL',
   'KUN_PROVIDER_FALLBACK',
   'KUN_SOURCE_DIR',
+  'HANGCORE_MANAGED_KUN_RUNTIME_DIR',
   'KUN_DATA_DIR',
   'KUN_RUNTIME_COMMAND',
   'KUN_RUNTIME_ARGS',
+  'LOCALAPPDATA',
 ];
+const originalPlatform = process.platform;
+const originalCwd = process.cwd();
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.stop()));
@@ -27,6 +31,8 @@ afterEach(async () => {
   for (const key of envKeys) {
     delete process.env[key];
   }
+  process.chdir(originalCwd);
+  Object.defineProperty(process, 'platform', { value: originalPlatform });
 });
 
 function startFakeKun(events: unknown[], options: { keepSseOpen?: boolean } = {}) {
@@ -184,6 +190,137 @@ describe('KunRuntimeClient', () => {
     expect(launch?.args).toContain('https://api.example.com/v1');
     expect(launch?.args).toContain('--model');
     expect(launch?.args).toContain('deepseek-chat');
+  });
+
+  test('auto-starts the bundled managed Kun runtime before falling back to global kun', async () => {
+    const managedRoot = mkdtempSync(join(tmpdir(), 'hangcore-managed-kun-'));
+    tempDirs.push(managedRoot);
+    mkdirSync(join(managedRoot, 'kun', 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(managedRoot, 'kun', 'package.json'),
+      JSON.stringify({ name: 'kun', bin: { kun: './dist/cli/serve-entry.js' } })
+    );
+    writeFileSync(join(managedRoot, 'kun', 'dist', 'cli', 'serve-entry.js'), 'process.exit(0);\n');
+    process.env.HANGCORE_MANAGED_KUN_RUNTIME_DIR = managedRoot;
+
+    let online = false;
+    let launch: { command: string; args: string[] } | undefined;
+    const client = new KunRuntimeClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      startupPollMs: 1,
+      startupTimeoutMs: 50,
+      startRuntime: async (input) => {
+        launch = { command: input.command, args: input.args };
+        online = true;
+      },
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/health') {
+          if (!online) throw new Error('connection refused');
+          return Response.json({ status: 'ok' });
+        }
+        if (url.pathname === '/v1/threads' && init?.method === 'POST') {
+          return Response.json({ id: 'thread-managed-runtime' }, { status: 201 });
+        }
+        return Response.json({ message: 'not found' }, { status: 404 });
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+
+    expect(session.sessionId).toBe('thread-managed-runtime');
+    expect(launch?.command).toBe(process.execPath);
+    expect(launch?.args[0]).toEndWith('kun-source-runtime.mjs');
+    expect(launch?.args).toContain(resolve(managedRoot));
+    expect(launch?.args).not.toContain('kun');
+  });
+
+  test('discovers the managed Kun runtime from Tauri encoded resources layout', async () => {
+    const appRoot = realpathSync(mkdtempSync(join(tmpdir(), 'hangcore-tauri-app-')));
+    tempDirs.push(appRoot);
+    const managedRoot = join(appRoot, 'resources', '_up_', '_up_', 'managed-runtimes', 'kun');
+    mkdirSync(join(managedRoot, 'kun', 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(managedRoot, 'kun', 'package.json'),
+      JSON.stringify({ name: 'kun', bin: { kun: './dist/cli/serve-entry.js' } })
+    );
+    writeFileSync(join(managedRoot, 'kun', 'dist', 'cli', 'serve-entry.js'), 'process.exit(0);\n');
+    process.chdir(appRoot);
+
+    let online = false;
+    let launch: { command: string; args: string[] } | undefined;
+    const client = new KunRuntimeClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      startupPollMs: 1,
+      startupTimeoutMs: 50,
+      startRuntime: async (input) => {
+        launch = { command: input.command, args: input.args };
+        online = true;
+      },
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/health') {
+          if (!online) throw new Error('connection refused');
+          return Response.json({ status: 'ok' });
+        }
+        if (url.pathname === '/v1/threads' && init?.method === 'POST') {
+          return Response.json({ id: 'thread-encoded-managed-runtime' }, { status: 201 });
+        }
+        return Response.json({ message: 'not found' }, { status: 404 });
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+
+    expect(session.sessionId).toBe('thread-encoded-managed-runtime');
+    expect(launch?.command).toBe(process.execPath);
+    expect(launch?.args[0]).toEndWith('kun-source-runtime.mjs');
+    expect(launch?.args).toContain(managedRoot);
+    expect(launch?.args).not.toContain('kun');
+  });
+
+  test('uses Windows local app data for default managed Kun runtime data dir on Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env.LOCALAPPDATA = 'C:\\Users\\Admin\\AppData\\Local';
+    const managedRoot = mkdtempSync(join(tmpdir(), 'hangcore-managed-kun-'));
+    tempDirs.push(managedRoot);
+    mkdirSync(join(managedRoot, 'kun', 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(managedRoot, 'kun', 'package.json'),
+      JSON.stringify({ name: 'kun', bin: { kun: './dist/cli/serve-entry.js' } })
+    );
+    writeFileSync(join(managedRoot, 'kun', 'dist', 'cli', 'serve-entry.js'), 'process.exit(0);\n');
+    process.env.HANGCORE_MANAGED_KUN_RUNTIME_DIR = managedRoot;
+
+    let online = false;
+    let launch: { args: string[] } | undefined;
+    const client = new KunRuntimeClient({
+      baseUrl: 'http://127.0.0.1:18899',
+      startupPollMs: 1,
+      startupTimeoutMs: 50,
+      startRuntime: async (input) => {
+        launch = { args: input.args };
+        online = true;
+      },
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/health') {
+          if (!online) throw new Error('connection refused');
+          return Response.json({ status: 'ok' });
+        }
+        if (url.pathname === '/v1/threads' && init?.method === 'POST') {
+          return Response.json({ id: 'thread-win-data-dir' }, { status: 201 });
+        }
+        return Response.json({ message: 'not found' }, { status: 404 });
+      },
+    });
+
+    const session = await client.createSession({ cwd: 'C:\\work\\project' });
+
+    expect(session.sessionId).toBe('thread-win-data-dir');
+    expect(launch?.args).toContain('--data-dir');
+    expect(launch?.args).toContain('C:\\Users\\Admin\\AppData\\Local\\NomiFun\\Nomi\\kun-runtime');
+    expect(launch?.args.join(' ')).not.toContain('Library');
   });
 
   test('does not bypass Kun runtime with injected provider env unless fallback is explicit', async () => {

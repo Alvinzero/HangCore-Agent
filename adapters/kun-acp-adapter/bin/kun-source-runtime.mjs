@@ -36,7 +36,8 @@ const env = {
 if (env.KUN_API_KEY && !env.DEEPSEEK_API_KEY) env.DEEPSEEK_API_KEY = env.KUN_API_KEY;
 if (env.KUN_BASE_URL && !env.DEEPSEEK_BASE_URL) env.DEEPSEEK_BASE_URL = env.KUN_BASE_URL;
 
-const child = spawn(process.env.KUN_NODE_COMMAND || 'node', [distEntry, ...runtimeArgs], {
+const jsRuntime = process.env.KUN_JS_RUNTIME_COMMAND || process.env.KUN_NODE_COMMAND || process.execPath;
+const child = spawn(jsRuntime, [distEntry, ...runtimeArgs], {
   cwd: packageDir,
   env,
   stdio: 'inherit',
@@ -74,9 +75,9 @@ function parseArgs(argv) {
 function normalizeKunSourceRoot(candidate) {
   const expanded = expandHome(candidate.trim());
   if (!expanded) return null;
-  if (existsSync(path.join(expanded, 'kun', 'package.json'))) return expanded;
+  if (existsSync(path.join(expanded, 'kun', 'package.json'))) return path.resolve(expanded);
   if (existsSync(path.join(expanded, 'package.json')) && path.basename(expanded) === 'kun') {
-    return path.dirname(expanded);
+    return path.dirname(path.resolve(expanded));
   }
   return null;
 }
