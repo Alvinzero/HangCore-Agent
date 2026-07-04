@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.7"
+        default: "0.1.8"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.7 bundles a managed Kun runtime for Windows installs, removes the need for a global kun command, and fixes the default Windows Kun data directory."
+        default: "HangCore Agent v0.1.8 keeps the native Kun Agent loop, starts the managed Kun runtime without a visible Windows console, and improves Kun Markdown/Mermaid rendering."
   push:
     tags:
       - "v*.*.*"

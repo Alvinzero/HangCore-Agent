@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 import { convertLatexDelimiters } from '@renderer/utils/chat/latexDelimiters';
 import LocalImageView from '@renderer/components/media/LocalImageView';
 import CodeBlock from './CodeBlock';
+import { normalizeMarkdownForRendering } from './normalizeMarkdown';
 import ShadowView from './ShadowView';
 
 const REMARK_PLUGINS = [remarkGfm, remarkMath, remarkBreaks];
@@ -52,6 +53,7 @@ const MarkdownView: React.FC<MarkdownViewProps> = React.memo(
       if (typeof childrenProp === 'string') {
         let text = childrenProp.replace(/file:\/\//g, '');
         text = convertLatexDelimiters(text);
+        text = normalizeMarkdownForRendering(text);
         return text;
       }
       return childrenProp;

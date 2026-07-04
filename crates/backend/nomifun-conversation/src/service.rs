@@ -42,6 +42,7 @@ use crate::stream_relay::StreamRelay;
 use std::sync::RwLock;
 
 const MAX_CRON_CONTINUATIONS_PER_TURN: usize = 4;
+const KUN_DEFAULT_RENDERING_SKILL: &str = "mermaid";
 
 /// Parse a string conversation id (the service's public-API / in-memory key
 /// form) into the integer key the repo now uses. A non-numeric id yields an
@@ -477,7 +478,7 @@ impl ConversationService {
             Vec::new()
         }
 
-        let (preset_enabled, exclude_auto_inject) = match extra.as_object_mut() {
+        let (mut preset_enabled, exclude_auto_inject) = match extra.as_object_mut() {
             Some(obj) => {
                 let preset = take_string_array(obj, &["preset_enabled_skills", "enabled_skills"]);
                 let exclude = take_string_array(obj, &["exclude_auto_inject_skills", "exclude_builtin_skills"]);
@@ -487,6 +488,17 @@ impl ConversationService {
             }
             None => (Vec::new(), Vec::new()),
         };
+        if req.r#type == AgentType::Acp
+            && extra
+                .get("backend")
+                .and_then(|value| value.as_str())
+                .is_some_and(|backend| backend.trim().eq_ignore_ascii_case("kun"))
+            && !preset_enabled
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(KUN_DEFAULT_RENDERING_SKILL))
+        {
+            preset_enabled.push(KUN_DEFAULT_RENDERING_SKILL.to_owned());
+        }
 
         let auto_inject_names = self.skill_resolver.auto_inject_names().await;
         let initial_skills = compute_initial_skills(&auto_inject_names, &preset_enabled, &exclude_auto_inject);
@@ -2444,6 +2456,7 @@ impl ConversationService {
             obj.entry("user_id")
                 .or_insert_with(|| serde_json::Value::String(row.user_id.clone()));
         }
+        ensure_kun_default_rendering_skill(&mut extra);
 
         // Extract workspace from extra (common across agent types)
         let workspace = match extra.get("workspace").and_then(|v| v.as_str()) {
@@ -2754,7 +2767,7 @@ impl ConversationService {
     /// failure.
     async fn backfill_extra_inplace(&self, conversation_id: i64, extra: &mut serde_json::Value) {
         let auto_inject = self.skill_resolver.auto_inject_names().await;
-        let mutated = backfill_skills_if_missing(extra, &auto_inject);
+        let mutated = backfill_skills_if_missing(extra, &auto_inject) | ensure_kun_default_rendering_skill(extra);
         if !mutated {
             return;
         }
@@ -2851,6 +2864,36 @@ fn conversation_label(agent_type: &AgentType, backend: Option<&serde_json::Value
         return s.clone();
     }
     agent_type.serde_name().to_owned()
+}
+
+fn ensure_kun_default_rendering_skill(extra: &mut serde_json::Value) -> bool {
+    let is_kun = extra
+        .get("backend")
+        .and_then(|value| value.as_str())
+        .is_some_and(|backend| backend.trim().eq_ignore_ascii_case("kun"));
+    if !is_kun {
+        return false;
+    }
+
+    let Some(obj) = extra.as_object_mut() else {
+        return false;
+    };
+    let skills = obj
+        .entry("skills")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let serde_json::Value::Array(skills) = skills else {
+        return false;
+    };
+    if skills.iter().any(|skill| {
+        skill
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(KUN_DEFAULT_RENDERING_SKILL))
+    }) {
+        return false;
+    }
+
+    skills.push(serde_json::Value::String(KUN_DEFAULT_RENDERING_SKILL.to_owned()));
+    true
 }
 
 /// Resolve the native skills directory list for an agent by looking it

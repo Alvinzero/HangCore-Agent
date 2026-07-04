@@ -87,7 +87,7 @@ describe('KunAcpAgent JSON-RPC stdio bridge', () => {
         id: 1,
         result: expect.objectContaining({
           protocolVersion: 1,
-          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.7' },
+          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.8' },
         }),
       })
     );

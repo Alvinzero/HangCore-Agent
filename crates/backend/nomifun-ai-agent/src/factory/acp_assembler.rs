@@ -167,15 +167,35 @@ fn resolve_mcp_servers(
     servers
 }
 
+const KUN_OUTPUT_FORMAT_CONTRACT: &str = r#"[Kun output format contract]
+Answer in standard Markdown that the NomiFun conversation renderer can display directly.
+- For architecture, flow, sequence, state, ER, or dependency diagrams, prefer a fenced Mermaid block:
+```mermaid
+flowchart TD
+  A[Start] --> B[Next]
+```
+- Do not use terminal ASCII box drawings as the primary diagram format.
+- For structured comparisons, use GitHub Flavored Markdown tables.
+- Keep code fences balanced and put the language name immediately after the opening fence."#;
+
 /// Compose first-message preset context.
 fn compose_preset_context(
     base_preset_context: Option<&str>,
-    _backend: Option<&str>,
+    backend: Option<&str>,
 ) -> Option<String> {
-    base_preset_context
+    let base = base_preset_context
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+        .map(str::to_owned);
+
+    if backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("kun")) {
+        return Some(match base {
+            Some(ctx) => format!("{KUN_OUTPUT_FORMAT_CONTRACT}\n\n{ctx}"),
+            None => KUN_OUTPUT_FORMAT_CONTRACT.to_owned(),
+        });
+    }
+
+    base
 }
 
 /// Prepend forceful `[Assistant Rules]` to the session preset context when the
@@ -486,6 +506,26 @@ mod tests {
     fn compose_preset_context_empty_string_treated_as_none() {
         let result = compose_preset_context(Some("  "), Some("unknown"));
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn compose_preset_context_kun_backend_adds_rendering_contract() {
+        let result = compose_preset_context(None, Some("kun")).unwrap();
+        assert!(result.contains("[Kun output format contract]"), "{result}");
+        assert!(result.contains("standard Markdown"), "{result}");
+        assert!(result.contains("```mermaid"), "{result}");
+        assert!(result.contains("ASCII"), "{result}");
+        assert!(result.contains("Markdown tables"), "{result}");
+    }
+
+    #[test]
+    fn compose_preset_context_kun_backend_preserves_base_context_after_contract() {
+        let result = compose_preset_context(Some("Domain rule."), Some("kun")).unwrap();
+        assert!(result.contains("[Kun output format contract]"), "{result}");
+        assert!(
+            result.ends_with("\n\nDomain rule."),
+            "base preset context must follow Kun rendering contract: {result}"
+        );
     }
 
     #[test]

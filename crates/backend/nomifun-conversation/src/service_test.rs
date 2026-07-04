@@ -3189,6 +3189,51 @@ async fn create_writes_empty_skills_when_no_auto_inject_and_no_preset() {
 }
 
 #[tokio::test]
+async fn create_adds_mermaid_skill_for_kun_backend_by_default() {
+    let resolver = Arc::new(FixedSkillResolver { names: vec![] });
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service_with_resolver(resolver);
+
+    let req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "acp",
+        "extra": { "workspace": "/project", "backend": "kun" },
+    }))
+    .unwrap();
+    let resp = svc.create("user-1", req).await.unwrap();
+
+    assert_eq!(resp.extra["skills"], json!(["mermaid"]));
+}
+
+#[test]
+fn build_task_options_adds_mermaid_skill_for_existing_kun_rows() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let row = ConversationRow {
+        id: 42,
+        user_id: "user-1".into(),
+        name: "Kun legacy".into(),
+        r#type: "acp".into(),
+        extra: json!({
+            "backend": "kun",
+            "workspace": "/project",
+            "skills": [],
+        })
+        .to_string(),
+        model: None,
+        status: Some("pending".into()),
+        source: None,
+        channel_chat_id: None,
+        pinned: false,
+        pinned_at: None,
+        cron_job_id: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+
+    let opts = svc.build_task_options(&row).unwrap();
+
+    assert_eq!(opts.extra["skills"], json!(["mermaid"]));
+}
+
+#[tokio::test]
 async fn warmup_restores_skill_links_for_recreated_auto_workspace() {
     let resolver = Arc::new(RecordingSkillResolver::new(vec!["cron".into()]));
     let links = resolver.links.clone();
