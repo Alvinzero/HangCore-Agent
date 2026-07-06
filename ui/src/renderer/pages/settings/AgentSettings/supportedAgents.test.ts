@@ -41,10 +41,10 @@ describe('SUPPORTED_AGENTS install guidance', () => {
     expect(websites.some((url) => url.includes('snowcli.dev'))).toBe(false);
   });
 
-  test('surfaces Kun as an experimental local ACP adapter without one-click install', () => {
+  test('surfaces the 8-bit MCU profile as the Kun-backed local ACP adapter without one-click install', () => {
     const kun = agent('kun');
 
-    expect(kun.name).toBe('Kun Agent');
+    expect(kun.name).toBe('8位MCU Profile');
     expect(kun.binary).toBe('kun-acp-adapter');
     expect(kun.installHint).toBe('');
     expect(kun.website).toBe(

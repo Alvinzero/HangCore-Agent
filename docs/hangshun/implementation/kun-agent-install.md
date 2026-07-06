@@ -1,28 +1,28 @@
-# Kun Agent 安装与连接说明
+# 8位MCU Profile 安装与连接说明
 
 适用版本：HangCore Agent v0.1.2 起；真实 Kun approval / user-input 闭环需使用 v0.1.5 或后续安装包；Windows 安装包内置受管 Kun runtime 需使用 v0.1.7 或后续安装包。
 
 ## 这不是主程序下载入口
 
-设置里的 Kun Agent “手动下载”入口只说明 Kun Agent adapter 的连接方式，不再跳到 HangCore Agent 主项目 Release。HangCore 主程序安装包只是桌面外壳；真正让 Kun Agent 可被 Local Agents 调用的是 `kun-acp-adapter`。
+设置里的 8位MCU Profile “手动下载”入口只说明 Kun adapter 的连接方式，不再跳到 HangCore Agent 主项目 Release。HangCore 主程序安装包只是桌面外壳；真正让 8位MCU Profile 可被 Local Agents 调用的是 `kun-acp-adapter`。
 
 ## 工作方式
 
-- HangCore Local Agents 内置 `Kun Agent`，命令为 `kun-acp-adapter --stdio`。
+- HangCore Local Agents 内置 `8位MCU Profile`，命令为 `kun-acp-adapter --stdio`。
 - Windows 桌面包会随包带上 HangCore 自己实现的 `kun-acp-adapter`。
-- v0.1.7 起，Windows 桌面包还会带上受管 Kun runtime 资源；用户不需要额外安装全局 `kun` 命令即可启动真实 Kun Agent loop。
+- v0.1.7 起，Windows 桌面包还会带上受管 Kun runtime 资源；用户不需要额外安装全局 `kun` 命令即可启动真实 Kun agent loop。
 - adapter 不把 Kun 运行时代码混入 nomiFun core，只通过 HTTP/SSE 调用本机或受管 Kun runtime。
 - Kun runtime 默认地址是 `http://127.0.0.1:18899`，可用 `KUN_RUNTIME_URL` 覆盖。
 - 当默认地址不可达时，adapter 会优先使用 `KUN_SOURCE_DIR`，其次使用安装包内置的受管 Kun runtime，再尝试同级 Kun 源码 checkout；如果这些都不可用，最后才尝试全局 `kun` 命令。
 - 本地自启动 runtime 会复用 NomiFun 系统设置里注入的模型、API Key 与 Base URL，并在未配置 `KUN_RUNTIME_TOKEN` 时以本机 `--insecure` 模式启动，避免 adapter 自己拉起的 runtime 拒绝本地 `/v1/*` 请求。
 
-选择 Kun Agent 后，HangCore 会启动 `kun-acp-adapter --stdio` 作为 ACP 子进程；adapter 创建 Kun thread、发送 prompt，并消费 Kun runtime 的 SSE 事件。因此这不是只套一个 UI 壳，而是把 NomiFun 的 Local Agents 对话流桥接到正在运行的 Kun agent loop。
+选择 8位MCU Profile 后，HangCore 会启动 `kun-acp-adapter --stdio` 作为 ACP 子进程；adapter 创建 Kun thread、发送 prompt，并消费 Kun runtime 的 SSE 事件。因此这不是只套一个 UI 壳，而是把 NomiFun 的 Local Agents 对话流桥接到正在运行的 Kun agent loop。产品展示名是 8位MCU Profile，底层仍保留 Kun 原生 loop、思考流、工具流和审批链路能力。
 
 ## 使用步骤
 
 1. 使用 v0.1.7 或后续 Windows 安装包时，正常情况下不需要手动安装 Kun CLI 或手动启动 runtime。
 
-2. 打开 HangCore Agent，进入设置里的 Local Agents，刷新后选择 Kun Agent 开始会话。
+2. 打开 HangCore Agent，进入设置里的 Local Agents，刷新后选择 8位MCU Profile 开始会话。
 
 首次对话时 adapter 会先探测 `/health`，如果默认 runtime 未启动，会自动拉起安装包内置的受管 Kun runtime。默认数据目录为 `%LOCALAPPDATA%\NomiFun\Nomi\kun-runtime`。
 

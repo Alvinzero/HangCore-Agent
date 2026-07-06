@@ -621,6 +621,7 @@ mod tests {
     async fn find_builtin_kun_declares_bun_bridge_dependency() {
         let reg = registry().await;
         let m = reg.find_builtin_by_backend("kun").await.unwrap();
+        assert_eq!(m.name, "8位MCU Profile");
         assert_eq!(m.command.as_deref(), Some("kun-acp-adapter"));
         assert_eq!(m.agent_source_info.binary_name.as_deref(), Some("kun-acp-adapter"));
         assert_eq!(m.agent_source_info.bridge_binary.as_deref(), Some("bun"));

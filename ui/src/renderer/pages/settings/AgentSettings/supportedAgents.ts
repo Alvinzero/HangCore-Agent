@@ -143,7 +143,7 @@ export const SUPPORTED_AGENTS: SupportedAgent[] = [
   },
   {
     backend: 'kun',
-    name: 'Kun Agent',
+    name: '8位MCU Profile',
     website: 'https://github.com/Alvinzero/HangCore-Agent/blob/main/docs/hangshun/implementation/kun-agent-install.md',
     installHint: '',
     binary: 'kun-acp-adapter',
