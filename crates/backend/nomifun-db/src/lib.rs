@@ -7,12 +7,13 @@ mod repository;
 pub use database::{Database, init_database, init_database_memory};
 pub use error::DbError;
 pub use models::{
-    AgentMetadataRow, AssistantOverrideRow, AssistantRow, AssistantTagRow, ConnectorCredentialRow,
-    ConversationArtifactRow, CreateAssistantParams, CreateAssistantTagParams,
-    CreateKnowledgeTagParams, CronJobRunRow, KnowledgeBaseRow, KnowledgeBindingRow,
-    KnowledgeTagRow, SkillTagRow, TagSettingRow, TerminalSessionRow, UpdateAgentHandshakeParams,
-    UpdateAssistantParams, UpdateAssistantTagParams, UpdateKnowledgeTagParams,
-    UpsertAgentMetadataParams, UpsertOverrideParams, UpsertSkillTagParams, WebhookRow,
+    AgentMetadataRow, AssistantOverrideRow, AssistantRow, AssistantTagRow, CodingTaskRow,
+    ConnectorCredentialRow, ConversationArtifactRow, CreateAssistantParams,
+    CreateAssistantTagParams, CreateKnowledgeTagParams, CronJobRunRow, KnowledgeBaseRow,
+    KnowledgeBindingRow, KnowledgeTagRow, SkillTagRow, SpecArtifactRow, TagSettingRow,
+    TerminalSessionRow, UpdateAgentHandshakeParams, UpdateAssistantParams,
+    UpdateAssistantTagParams, UpdateKnowledgeTagParams, UpsertAgentMetadataParams,
+    UpsertOverrideParams, UpsertSkillTagParams, WebhookRow,
 };
 pub use repository::channel::UpdatePluginStatusParams;
 pub use repository::conversation::{
@@ -24,24 +25,25 @@ pub use repository::oauth_token::UpsertOAuthTokenParams;
 pub use repository::provider::{CreateProviderParams, UpdateProviderParams};
 pub use repository::remote_agent::{CreateRemoteAgentParams, UpdateRemoteAgentParams};
 pub use repository::{
-    CreateAcpSessionParams, CreateTerminalParams, GLOBAL_CAP, IAcpSessionRepository,
-    IAgentMetadataRepository, IAssistantOverrideRepository, IAssistantRepository,
-    IAssistantTagRepository, IAttachmentRepository, IChannelRepository,
-    IClientPreferenceRepository, ICompanionTokenRepository, IConnectorCredentialRepository,
-    IConversationRepository, ICronRepository, IIdmmInterventionRepository, IKnowledgeRepository,
-    IMcpServerRepository, IOAuthTokenRepository, IProviderRepository, IRemoteAgentRepository,
-    IRequirementRepository, ISettingsRepository, ISkillTagRepository, ITagSettingRepository,
-    ITerminalRepository, IUserRepository, IWebhookRepository,
-    ListRequirementsParams, PER_TARGET_CAP, PersistedSessionState, SaveRuntimeStateParams,
-    SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteAssistantOverrideRepository,
-    SqliteAssistantRepository, SqliteAssistantTagRepository, SqliteAttachmentRepository,
-    SqliteChannelRepository, SqliteClientPreferenceRepository, SqliteCompanionTokenRepository,
+    CreateAcpSessionParams, CreateCodingTaskParams, CreateTerminalParams, GLOBAL_CAP,
+    IAcpSessionRepository, IAgentMetadataRepository, IAssistantOverrideRepository,
+    IAssistantRepository, IAssistantTagRepository, IAttachmentRepository, IChannelRepository,
+    IClientPreferenceRepository, ICodingTaskRepository, ICompanionTokenRepository,
+    IConnectorCredentialRepository, IConversationRepository, ICronRepository,
+    IIdmmInterventionRepository, IKnowledgeRepository, IMcpServerRepository, IOAuthTokenRepository,
+    IProviderRepository, IRemoteAgentRepository, IRequirementRepository, ISettingsRepository,
+    ISkillTagRepository, ITagSettingRepository, ITerminalRepository, IUserRepository,
+    IWebhookRepository, ListRequirementsParams, PER_TARGET_CAP, PersistedSessionState,
+    SaveRuntimeStateParams, SqliteAcpSessionRepository, SqliteAgentMetadataRepository,
+    SqliteAssistantOverrideRepository, SqliteAssistantRepository, SqliteAssistantTagRepository,
+    SqliteAttachmentRepository, SqliteChannelRepository, SqliteClientPreferenceRepository,
+    SqliteCodingTaskRepository, SqliteCompanionTokenRepository,
     SqliteConnectorCredentialRepository, SqliteConversationRepository, SqliteCronRepository,
     SqliteIdmmInterventionRepository, SqliteKnowledgeRepository, SqliteMcpServerRepository,
     SqliteOAuthTokenRepository, SqliteProviderRepository, SqliteRemoteAgentRepository,
     SqliteRequirementRepository, SqliteSettingsRepository, SqliteSkillTagRepository,
-    SqliteTagSettingRepository, SqliteTerminalRepository,
-    SqliteUserRepository, SqliteWebhookRepository, TTL_MS,
+    SqliteTagSettingRepository, SqliteTerminalRepository, SqliteUserRepository,
+    SqliteWebhookRepository, TTL_MS, UpsertSpecArtifactParams,
 };
 // Orchestration (智能编排) repository traits + sqlite impls + params.
 pub use repository::{

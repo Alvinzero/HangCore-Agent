@@ -39,6 +39,7 @@ use nomifun_secret::secret_routes;
 
 use crate::services::AppServices;
 
+use super::coding_task::{CodingTaskRouterState, coding_task_routes};
 use super::computer_permissions::{
     computer_permission_status, open_permission_settings, request_computer_permission,
 };
@@ -325,6 +326,13 @@ pub fn create_router_with_all_state(
     })
     .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
 
+    let coding_task_authenticated = coding_task_routes(CodingTaskRouterState {
+        repo: Arc::new(nomifun_db::SqliteCodingTaskRepository::new(
+            services.database.pool().clone(),
+        )),
+    })
+    .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
     // Connection test routes (Bedrock, Gemini) protected by auth middleware
     let connection_test_authenticated = connection_test_routes(states.connection_test)
         .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
@@ -512,6 +520,7 @@ pub fn create_router_with_all_state(
         .merge(remote_agent_authenticated)
         .merge(agent_authenticated)
         .merge(model_failover_authenticated)
+        .merge(coding_task_authenticated)
         .merge(connection_test_authenticated)
         .merge(file_authenticated)
         .merge(mcp_authenticated)

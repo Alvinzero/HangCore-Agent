@@ -70,6 +70,12 @@ import type {
   UpdateAssistantTagRequest,
 } from '../types/agent/assistantTypes';
 import type { PreviewHistoryTarget, PreviewSnapshotInfo } from '../types/office/preview';
+import type {
+  CodingTask,
+  CodingTaskCreateRequest,
+  SpecArtifact,
+  SpecArtifactUpsertRequest,
+} from '../types/codingTask';
 import type { AcpModelInfo } from '../types/platform/acpTypes';
 import type {
   CreateProviderRequest,
@@ -434,6 +440,28 @@ export const conversation = {
         `/api/conversations/${p.conversation_id}/approvals/check?action=${encodeURIComponent(p.action)}${p.command_type ? `&command_type=${encodeURIComponent(p.command_type)}` : ''}`
     ),
   },
+};
+
+export const codingTasks = {
+  list: httpGet<CodingTask[], { limit?: number; offset?: number }>((p) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set('limit', String(p.limit));
+    if (p?.offset != null) params.set('offset', String(p.offset));
+    const query = params.toString();
+    return query ? `/api/coding-tasks?${query}` : '/api/coding-tasks';
+  }),
+  create: httpPost<CodingTask, CodingTaskCreateRequest>('/api/coding-tasks'),
+  get: httpGet<CodingTask, { id: string }>((p) => `/api/coding-tasks/${encodeURIComponent(p.id)}`),
+  listArtifacts: httpGet<SpecArtifact[], { task_id: string }>(
+    (p) => `/api/coding-tasks/${encodeURIComponent(p.task_id)}/artifacts`
+  ),
+  upsertArtifact: httpPut<SpecArtifact, SpecArtifactUpsertRequest>(
+    (p) => `/api/coding-tasks/${encodeURIComponent(p.task_id)}/artifacts/${encodeURIComponent(p.kind)}`,
+    (p) => {
+      const { task_id: _taskId, kind: _kind, ...body } = p;
+      return body;
+    }
+  ),
 };
 
 // ---------------------------------------------------------------------------

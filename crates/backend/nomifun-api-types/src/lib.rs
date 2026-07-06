@@ -7,6 +7,7 @@ mod agent_error;
 mod assistant;
 mod auth;
 mod channel;
+mod coding_task;
 mod confirmation;
 mod connection_test;
 mod conversation;
@@ -73,6 +74,10 @@ pub use channel::{
     SyncChannelSettingsRequest, TestPluginExtraConfig, TestPluginRequest, TestPluginResponse,
     UserAuthorizedPayload,
 };
+pub use coding_task::{
+    CodingTaskCreateRequest, CodingTaskResponse, ListCodingTasksQuery, SpecArtifactResponse,
+    SpecArtifactUpsertRequest,
+};
 pub use confirmation::{
     ApprovalCheckQuery, ApprovalCheckResponse, ConfirmRequest, ConfirmationListResponse,
 };
@@ -94,7 +99,8 @@ pub use cron::{
     SaveCronSkillRequest, UpdateCronJobRequest,
 };
 pub use custom_agent::{
-    CustomAgentAdvancedOverrides, CustomAgentUpsertRequest, DeleteCustomAgentResponse, SetEnabledRequest,
+    CustomAgentAdvancedOverrides, CustomAgentUpsertRequest, DeleteCustomAgentResponse,
+    SetEnabledRequest,
 };
 pub use extension::{
     DisableExtensionRequest, EnableExtensionRequest, ExtensionSummaryResponse, GetI18nRequest,
@@ -142,14 +148,15 @@ pub use office::{
     PreviewUrlResponse, SaveSnapshotRequest, SnapshotContentResponse, StarOfficeDetectResponse,
     StartPreviewRequest, StopPreviewRequest,
 };
+pub use orchestrator::AdjustRunRequest;
 pub use orchestrator::{
     Assignment, CapabilityProfile, CreateAdhocRunRequest, CreateFleetRequest, CreateRunRequest,
     CreateWorkspaceRequest, Fleet, FleetMember, FleetMemberInput, MemberConstraints, ModelRange,
     ModelRef, OrchWorkspace, PlannedDag, PlannedTask, ReassignRequest, ReplanRequest, Run,
     RunDetail, RunRenameRequest, RunTask, RunTaskDep, SteerRequest, TaskConfigUpdateRequest,
-    TaskProfile, TaskSpecUpdateRequest, UpdateFleetRequest, UpdateWorkspaceRequest, derive_capability,
+    TaskProfile, TaskSpecUpdateRequest, UpdateFleetRequest, UpdateWorkspaceRequest,
+    derive_capability,
 };
-pub use orchestrator::AdjustRunRequest;
 pub use provider::{
     BedrockAuthMethod, BedrockConfig, CreateProviderRequest, DetectProtocolRequest,
     DetectedProtocol, DetectionSuggestion, FetchModelsAnonymousRequest, FetchModelsRequest,

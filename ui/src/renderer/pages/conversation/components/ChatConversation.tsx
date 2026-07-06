@@ -21,6 +21,7 @@ import { emitter } from '../../../utils/emitter';
 import AcpChat from '../platforms/acp/AcpChat';
 import ChatLayout from './ChatLayout';
 import ChatSlider from './ChatSlider.tsx';
+import CodingTaskPanel from './CodingTaskPanel';
 import NanobotChat from '../platforms/nanobot/NanobotChat';
 import OpenClawChat from '../platforms/openclaw/OpenClawChat';
 import RemoteChat from '../platforms/remote/RemoteChat';
@@ -42,6 +43,15 @@ const hasLoadedSkill = (conversation: TChatConversation | undefined, skillName: 
   const skills = (conversation?.extra as { skills?: string[] } | undefined)?.skills;
   return skills?.includes(skillName) ?? false;
 };
+
+const ConversationWorkspaceSider: React.FC<{ conversation?: TChatConversation }> = ({ conversation }) => (
+  <div className='h-full flex flex-col min-h-0'>
+    <CodingTaskPanel conversation={conversation} />
+    <div className='flex-1 min-h-0 overflow-hidden'>
+      <ChatSlider conversation={conversation} />
+    </div>
+  </div>
+);
 
 const _AssociatedConversation: React.FC<{ conversation_id: number }> = ({ conversation_id }) => {
   const { data } = useSWR(['getAssociateConversation', conversation_id], () =>
@@ -170,7 +180,7 @@ const NomiConversationPanel: React.FC<{ conversation: NomiConversation; sliderTi
   const chatLayoutProps = {
     title: conversation.name,
     siderTitle: sliderTitle,
-    sider: <ChatSlider conversation={conversation} />,
+    sider: <ConversationWorkspaceSider conversation={conversation} />,
     headerExtra: (
       <div className='flex items-center gap-8px'>
         {/* 编排画布 (Option B): the orchestration canvas + run controls live in a
@@ -419,7 +429,7 @@ const ChatConversation: React.FC<{
       {...chatLayoutProps}
       headerExtra={headerExtraNode}
       siderTitle={sliderTitle}
-      sider={<ChatSlider conversation={conversation} />}
+      sider={<ConversationWorkspaceSider conversation={conversation} />}
       workspaceEnabled={workspaceEnabled}
       workspacePath={conversation?.extra?.workspace}
       isTemporaryWorkspace={

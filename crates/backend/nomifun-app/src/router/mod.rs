@@ -1,8 +1,9 @@
 //! HTTP router assembly for the application.
 
-pub mod companion_token_routes;
 #[cfg(feature = "browser-use")]
 pub(crate) mod browser_login;
+mod coding_task;
+pub mod companion_token_routes;
 mod computer_permissions;
 mod health;
 mod model_failover;

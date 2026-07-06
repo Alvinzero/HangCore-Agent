@@ -4,6 +4,7 @@ mod assistant;
 mod attachment;
 mod channel;
 mod client_preference;
+mod coding_task;
 mod companion_token;
 mod connector_credential;
 mod conversation;
@@ -36,6 +37,7 @@ pub use assistant::{
 pub use attachment::AttachmentRow;
 pub use channel::{AssistantSessionRow, AssistantUserRow, ChannelPluginRow, PairingCodeRow};
 pub use client_preference::ClientPreference;
+pub use coding_task::{CodingTaskRow, SpecArtifactRow};
 pub use companion_token::CompanionApiTokenRow;
 pub use connector_credential::ConnectorCredentialRow;
 pub use conversation::ConversationRow;
