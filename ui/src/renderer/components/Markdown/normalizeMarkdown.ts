@@ -46,6 +46,9 @@ const FENCE_LINE = /^(\s{0,3})(`{3,}|~{3,})(.*)$/;
 const MERMAID_OPENING_FENCE = /^\s{0,3}(`{3,}|~{3,})mermaid\s*$/i;
 const FLOWCHART_DIRECTIVE = /^(\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR))\s+(.+)$/i;
 const FLOWCHART_EDGE_START = /\s+([A-Za-z_][\w-]*(?:\[[^\]\n]*\])?\s*(?:-->|---|==>|-.->|--\|))/g;
+const EMBEDDED_HEADING_MARKER = /([^\n#])\s*(#{2,6})(?=[^\s#])/g;
+const GLUED_HEADING_PARAGRAPH =
+  /^([\p{Script=Han}A-Za-z0-9（）()《》「」【】、:：·\-\s]{2,24}?)(Kun|NomiFun|Agent|GUI|Electron|React|Rust|HTTP|SSE|AI|MCP|ACP|它|这是|主要|通过|采用|包含|负责|用于|支持|能够|是一个|是一种)(.*)$/u;
 
 function splitTrailingFence(line: string, fence: string): string[] {
   const trimmedEnd = line.trimEnd();
@@ -105,8 +108,21 @@ function isTableDelimiter(line: string): boolean {
   return trimmed.split('|').every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
+function normalizeLooseHeadingBoundaries(segment: string): string {
+  return segment
+    .replace(EMBEDDED_HEADING_MARKER, '$1\n\n$2')
+    .replace(/^(\s{0,3}#{1,6})([^\s#\n][^\n]*)$/gm, (_match, marker, body) => {
+      const split = String(body).match(GLUED_HEADING_PARAGRAPH);
+      if (split) {
+        const [, heading, paragraphStart, paragraphRest] = split;
+        return `${String(marker)} ${heading.trimEnd()}\n\n${paragraphStart}${paragraphRest}`;
+      }
+      return `${String(marker)} ${String(body)}`;
+    });
+}
+
 function normalizeLooseMarkdownBlocks(segment: string): string {
-  let text = segment.replace(/^(\s{0,3}#{1,6})([^\s#\n])/gm, '$1 $2');
+  let text = normalizeLooseHeadingBoundaries(segment);
 
   text = text.replace(/^(\s{0,3}#{1,6}\s+[^|\n]+?)\s*(\|[^\n]*\|)\s*$/gm, (_match, heading, tableHeader) => {
     return `${String(heading).trimEnd()}\n\n${String(tableHeader).trim()}`;

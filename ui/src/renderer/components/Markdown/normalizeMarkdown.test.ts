@@ -46,6 +46,14 @@ describe('normalizeMarkdownForRendering', () => {
     );
   });
 
+  test('repairs heading markers glued to the previous sentence and next paragraph', () => {
+    const input = 'Kun的框架概览###核心定位Kun是一个 GUI-native 的 AI编程助手桌面应用。';
+
+    expect(normalizeMarkdownForRendering(input)).toBe(
+      ['Kun的框架概览', '', '### 核心定位', '', 'Kun是一个 GUI-native 的 AI编程助手桌面应用。'].join('\n')
+    );
+  });
+
   test('does not rewrite headings or tables inside regular fenced code blocks', () => {
     const input = ['```text', '###不要改', '## Title|A|B|', '|---|---|', '```'].join('\n');
 
