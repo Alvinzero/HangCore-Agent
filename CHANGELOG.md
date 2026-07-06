@@ -5,6 +5,20 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
+## v0.1.10 - 2026-07-06
+
+- Added the CodingTask + SpecArtifact MVP: durable `coding_tasks` and
+  `spec_artifacts` records, conversation/workspace/Agent bindings, and
+  structured Spec / Plan / Tasks artifacts.
+- Added authenticated `/api/coding-tasks` routes with repository and app E2E
+  coverage for task creation, listing, lookup, artifact upsert/list, and
+  conversation binding.
+- Added a compact conversation-sidebar CodingTask panel for creating a bound
+  task and manually saving Spec / Plan / Tasks without changing the existing
+  8位MCU Profile / Kun runtime loop.
+- Kept MCU compilation, flashing, automatic repair, and 32-bit profile work out
+  of this release; those remain follow-up stages.
+
 ## v0.1.9 - 2026-07-06
 
 - Renamed the user-facing Kun-backed local agent to `8位MCU Profile`.

@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.9"
+        default: "0.1.10"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.9 renames the Kun-backed local agent to 8位MCU Profile while keeping the native Kun runtime loop, streaming, reasoning, tool calls, and managed Windows runtime path."
+        default: "HangCore Agent v0.1.10 adds the CodingTask + SpecArtifact MVP: conversation-bound task records, Spec/Plan/Tasks artifacts, selected Agent traceability, and a compact conversation sidebar panel while preserving the existing 8位MCU Profile Kun runtime loop."
   push:
     tags:
       - "v*.*.*"
