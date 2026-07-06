@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.8"
+        default: "0.1.9"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.8 keeps the native Kun Agent loop, starts the managed Kun runtime without a visible Windows console, and improves Kun Markdown/Mermaid rendering."
+        default: "HangCore Agent v0.1.9 renames the Kun-backed local agent to 8位MCU Profile while keeping the native Kun runtime loop, streaming, reasoning, tool calls, and managed Windows runtime path."
   push:
     tags:
       - "v*.*.*"

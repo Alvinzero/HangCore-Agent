@@ -5,7 +5,18 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
-- Bundle a managed Kun runtime for Windows packages so Kun Agent no longer
+## v0.1.9 - 2026-07-06
+
+- Renamed the user-facing Kun-backed local agent to `8位MCU Profile`.
+- Kept the stable `backend = "kun"`, `agent_builtin_kun`, `kun-acp-adapter`,
+  and managed Kun runtime loop so existing conversations and runtime behavior
+  continue to work.
+- Added a database migration for existing installs and updated Windows release
+  defaults for the `v0.1.9` package.
+
+## v0.1.8 - 2026-07-06
+
+- Bundle a managed Kun runtime for Windows packages so 8位MCU Profile no longer
   requires a globally installed `kun` command on clean user machines.
 - Prefer the managed runtime during adapter auto-start while preserving
   `KUN_SOURCE_DIR`, custom runtime command, and global `kun` overrides.
@@ -14,7 +25,7 @@ notes at a high level rather than a complete historical log.
 
 ## v0.1.6 - 2026-07-03
 
-- Corrected Kun Agent to require the native Kun runtime by default. Provider-only
+- Corrected 8位MCU Profile to require the native Kun runtime by default. Provider-only
   fallback is now an explicit diagnostic path gated by `KUN_PROVIDER_FALLBACK=1`.
 - Added source-runtime auto-start for local Kun checkouts so HangCore can start
   the real Kun agent loop even when no global `kun` command is installed.

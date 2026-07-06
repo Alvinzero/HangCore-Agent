@@ -235,7 +235,7 @@ export class KunRuntimeClient {
     }
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.8');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.9');
     }
 
     const started = await this.request<Record<string, unknown>>(`/v1/threads/${encodeURIComponent(sessionId)}/turns`, {
@@ -386,7 +386,7 @@ export class KunRuntimeClient {
   private async promptWithProviderFallback(sessionId: string, request: AcpPromptRequest): Promise<AcpPromptResponse> {
     const prompt = promptToText(request.prompt || []);
     if (!prompt.trim()) {
-      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.8');
+      throw new Error('Kun ACP adapter only supports non-empty text prompts in v0.1.9');
     }
     const text = await this.providerFallback!.complete(prompt);
     if (text) {
@@ -879,7 +879,7 @@ function runtimeRequiredError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
   }
   const wrapped = new Error(
-    `${error.message} System model provider settings were injected for Kun runtime, but HangCore will not bypass the native Kun Agent loop by default. Start Kun runtime, or set KUN_PROVIDER_FALLBACK=1 only for a provider-only diagnostic fallback.`,
+    `${error.message} System model provider settings were injected for Kun runtime, but HangCore will not bypass the native Kun-backed 8位MCU Profile loop by default. Start Kun runtime, or set KUN_PROVIDER_FALLBACK=1 only for a provider-only diagnostic fallback.`,
     { cause: error }
   );
   (wrapped as Error & { code?: unknown }).code = (error as Error & { code?: unknown }).code;
