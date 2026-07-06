@@ -81,7 +81,7 @@
 | `v0.1.6` | Kun runtime 真实链路纠偏 | 已发布 | provider fallback 改为显式诊断模式；adapter 自动发现 Kun 源码 runtime 并复用系统模型服务商配置启动真实 runtime；CRLF SSE frame 边界兼容以降低流式输出缓冲延迟。 |
 | `v0.1.7` | 受管 Kun runtime 内嵌 | 已发布 | Windows 安装包准备并携带受管 Kun runtime，adapter 优先启动该 runtime，修正 Windows 默认 Kun 数据目录，避免用户手动安装或启动全局 `kun` 命令。 |
 | `v0.1.8` | Kun runtime 后台托管与 Markdown 修复 | 已发布 | 保留原生 Kun loop，后台托管受管 Kun runtime，避免 Windows 可见 cmd 黑框，并修复 Kun 输出 Markdown / Mermaid 渲染兼容性。 |
-| `v0.1.9` | 8位MCU Profile 改名 | 发布准备中 | 将旧的 Kun-backed 本地 Agent 展示名收敛为 `8位MCU Profile`，保留 `backend = "kun"`、`agent_builtin_kun`、`kun-acp-adapter` 和真实 Kun runtime loop。 |
+| `v0.1.9` | 8位MCU Profile 改名 | 已发布 | 将旧的 Kun-backed 本地 Agent 展示名收敛为 `8位MCU Profile`，保留 `backend = "kun"`、`agent_builtin_kun`、`kun-acp-adapter` 和真实 Kun runtime loop。 |
 
 ## 6. 下一版本候选
 
