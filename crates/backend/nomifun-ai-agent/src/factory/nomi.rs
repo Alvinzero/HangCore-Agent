@@ -12,6 +12,7 @@ use nomifun_runtime::resolve_command_path;
 use tracing::{debug, info, warn};
 
 use crate::agent_task::AgentInstance;
+use crate::enterprise_knowledge::EnterpriseKnowledgeConfig;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
 use crate::manager::nomi::{NomiAgentManager, sanitize_session_messages};
@@ -23,6 +24,9 @@ pub(super) async fn build(
     ctx: FactoryContext,
 ) -> Result<AgentInstance, AppError> {
     let mut overrides: NomiBuildExtra = serde_json::from_value(options.extra).unwrap_or_default();
+    let enterprise_knowledge_mode =
+        EnterpriseKnowledgeConfig::load_from_repo(deps.client_prefs.as_ref()).await.mode;
+    let knowledge_search_enabled = !enterprise_knowledge_mode.is_disabled();
 
     // Merge preset assistant rules into system_prompt (used as custom_prompt
     // in nomi's build_system_prompt). Mirrors the old architecture's
@@ -120,7 +124,7 @@ pub(super) async fn build(
     let knowledge_write_enabled = !matches!(
         knowledge_write_policy.mode,
         nomifun_knowledge::WriteMode::Disabled
-    );
+    ) && enterprise_knowledge_mode.is_personal();
     let knowledge_writeback_staged = matches!(
         knowledge_write_policy.mode,
         nomifun_knowledge::WriteMode::Staged { .. }
@@ -130,12 +134,16 @@ pub(super) async fn build(
     // write-back contract) to the system prompt, so nomi-engine sessions
     // (companion companion threads included) see the same knowledge context the
     // ACP path gets via its preset_context.
-    overrides.system_prompt = append_knowledge_context(
-        overrides.system_prompt.take(),
-        &overrides,
-        &ctx.conversation_id,
-        knowledge_write_enabled,
-    );
+    overrides.system_prompt = if knowledge_search_enabled {
+        append_knowledge_context(
+            overrides.system_prompt.take(),
+            &overrides,
+            &ctx.conversation_id,
+            knowledge_write_enabled,
+        )
+    } else {
+        overrides.system_prompt.take()
+    };
 
     // Orchestration lead (会话 entry "auto/range" models → extra.orchestrator_role
     // == "lead"): prepend the server-authored 编排主管 system prompt so the
@@ -438,13 +446,18 @@ pub(super) async fn build(
         .iter()
         .map(|m| (m.id.clone(), m.name.clone()))
         .collect();
+    let knowledge_retrieval_sink = if knowledge_search_enabled {
+        deps.knowledge_retrieval.clone()
+    } else {
+        None
+    };
     let knowledge_writeback_sink = if knowledge_write_enabled {
         deps.knowledge_writeback.clone()
     } else {
         None
     };
 
-    let knowledge_prelude: Option<String> = if overrides.knowledge_mounts.is_empty() {
+    let knowledge_prelude: Option<String> = if overrides.knowledge_mounts.is_empty() || !knowledge_search_enabled {
         None
     } else {
         let names: Vec<&str> = overrides
@@ -472,7 +485,7 @@ pub(super) async fn build(
         } else {
             None
         },
-        deps.knowledge_retrieval.clone(),
+        knowledge_retrieval_sink,
         knowledge_kb_ids,
         knowledge_prelude,
         knowledge_writeback_sink,

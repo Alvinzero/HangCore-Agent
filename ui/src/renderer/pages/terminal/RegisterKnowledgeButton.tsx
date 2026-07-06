@@ -27,7 +27,7 @@ const FAMILY_OPTIONS: { value: AgentFamily; label: string; note: string }[] = [
 ];
 
 /**
- * One-click button that registers the platform knowledge MCP into the working
+ * One-click button that registers the knowledge-source MCP into the working
  * path's CLI auto-discovery config. Clicking opens a modal where the user picks
  * the CLI family, then confirms to register.
  */
@@ -79,7 +79,7 @@ const RegisterKnowledgeButton: React.FC<RegisterKnowledgeButtonProps> = ({ cwd, 
 
   const modal = (
     <Modal
-      title={t('terminal.registerKnowledge.modalTitle', { defaultValue: '接入平台知识库' })}
+      title={t('terminal.registerKnowledge.modalTitle', { defaultValue: '接入知识来源' })}
       visible={visible}
       onCancel={() => setVisible(false)}
       confirmLoading={loading}
@@ -117,7 +117,7 @@ const RegisterKnowledgeButton: React.FC<RegisterKnowledgeButtonProps> = ({ cwd, 
   if (compact) {
     return (
       <>
-        <Tooltip content={disabledTooltip || t('terminal.registerKnowledge.buttonCompact', { defaultValue: '接入知识库' })}>
+        <Tooltip content={disabledTooltip || t('terminal.registerKnowledge.buttonCompact', { defaultValue: '接入知识来源' })}>
           <Button
             size='small'
             type='secondary'
@@ -144,7 +144,7 @@ const RegisterKnowledgeButton: React.FC<RegisterKnowledgeButtonProps> = ({ cwd, 
           loading={loading}
           onClick={openModal}
         >
-          {t('terminal.registerKnowledge.button', { defaultValue: '一键接入平台知识库' })}
+          {t('terminal.registerKnowledge.button', { defaultValue: '一键接入知识来源' })}
         </Button>
       </Tooltip>
       {modal}

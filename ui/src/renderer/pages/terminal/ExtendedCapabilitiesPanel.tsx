@@ -93,15 +93,15 @@ const ExtendedCapabilitiesPanel: React.FC<ExtendedCapabilitiesPanelProps> = ({
 
       {expanded && (
         <div className='px-16px pb-16px'>
-          {/* 平台知识库 — mount + connect unified in one block */}
+          {/* 知识来源 — mount + connect unified in one block */}
           {hasKnowledge && (
             <div className='rounded-8px bg-fill-0 px-12px py-10px'>
               <div className='text-13px font-medium text-t-primary'>
-                {t('terminal.extended.knowledgeLabel', { defaultValue: '平台知识库' })}
+                {t('terminal.extended.knowledgeLabel', { defaultValue: '知识来源' })}
               </div>
               <div className='mt-2px text-12px leading-16px text-t-tertiary'>
                 {t('terminal.extended.knowledgeDesc', {
-                  defaultValue: '挂载知识库到工作路径，供该终端的 Agent 检索。',
+                  defaultValue: '挂载个人资料库到工作路径，供该终端的 Agent 检索。',
                 })}
               </div>
 

@@ -63,9 +63,9 @@ const MCP_DOMAIN_OPTIONS: McpDomainOption[] = [
   {
     id: 'knowledge',
     titleKey: 'settings.openCapabilities.domainKnowledgeTitle',
-    defaultTitle: '知识库',
+    defaultTitle: '知识来源',
     descKey: 'settings.openCapabilities.domainKnowledgeDesc',
-    defaultDesc: '读取、写入、绑定和维护 NomiFun 知识库内容。',
+    defaultDesc: '绑定和检索 NomiFun 个人资料库内容。',
   },
   {
     id: 'files',
@@ -380,7 +380,7 @@ const OpenCapabilitiesPage: React.FC = () => {
                 title={t('settings.openCapabilities.projectRegisterTitle', { defaultValue: '项目级 MCP 注册' })}
                 description={t('settings.openCapabilities.projectRegisterDesc', {
                   defaultValue:
-                    '当前可一键写入的是平台知识库 MCP：Claude / Gemini 写入指定项目配置，Codex 由于没有项目级配置，只能写入全局配置。',
+                    '当前可一键写入的是知识来源 MCP：Claude / Gemini 写入指定项目配置，Codex 由于没有项目级配置，只能写入全局配置。',
                 })}
               />
               <div className='mt-14px grid grid-cols-1 gap-12px lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end'>

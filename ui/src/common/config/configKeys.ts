@@ -47,6 +47,11 @@ export type ConfigKeyMap = {
   // generators (autogen / description.generate / description.polish). Empty
   // value = let the backend fall back to its own default completer model.
   'knowledge.autogenModel': { provider_id: string; model: string } | undefined;
+  'enterprise.enabled': boolean | undefined;
+  'enterprise.baseUrl': string | undefined;
+  'enterprise.workspaceId': string | undefined;
+  'enterprise.authToken': string | undefined;
+  'enterprise.knowledgeMode': 'enterprise' | 'personal' | 'disabled' | undefined;
   'tools.imageGenerationModel': TProviderWithModel & { switch?: boolean };
   'tools.speechToText': SpeechToTextConfig | undefined;
   'workspace.pasteConfirm': boolean | undefined;

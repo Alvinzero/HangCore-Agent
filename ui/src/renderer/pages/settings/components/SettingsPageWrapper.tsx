@@ -70,6 +70,12 @@ export function getBuiltinSettingsNavItems(t: TranslateFn): NavItem[] {
       icon: <Speed theme='outline' size='16' />,
       path: 'agent-runtime',
     },
+    enterprise: {
+      id: 'enterprise',
+      label: t('settings.enterprise.title', { defaultValue: '企业连接' }),
+      icon: <LinkCloud theme='outline' size='16' />,
+      path: 'enterprise',
+    },
     'browser-use': {
       id: 'browser-use',
       label: t('settings.browserUseNav'),

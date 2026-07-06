@@ -28,7 +28,6 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Button, Input, Message, Popover, Switch, Tooltip } from '@arco-design/web-react';
 import { BookOne } from '@icon-park/react';
-import { useNavigate } from 'react-router-dom';
 import { ipcBridge } from '@/common';
 import type {
   IKnowledgeBase,
@@ -38,6 +37,7 @@ import type {
   KnowledgeWritebackEagerness,
   KnowledgeWritebackMode,
 } from '@/common/adapter/ipcBridge';
+import { configService } from '@/common/config/configService';
 import { useConversationHistoryContext } from '@/renderer/hooks/context/ConversationHistoryContext';
 import { useTerminalSessions } from '@/renderer/pages/terminal/useTerminalSessions';
 import {
@@ -152,10 +152,12 @@ function kindLabel(kind: IKnowledgeBase['kind'], t: TFunction): string {
 
 const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disabledReason, applyNote, footer }) => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const { conversations } = useConversationHistoryContext();
   const { sessions: terminalSessions } = useTerminalSessions();
   const { tags: allTags } = useKnowledgeTags();
+  const [knowledgeMode, setKnowledgeMode] = useState<'enterprise' | 'personal' | 'disabled'>(
+    () => configService.get('enterprise.knowledgeMode') ?? 'personal'
+  );
 
   // Build tag key → IKnowledgeTag map
   const tagMap = useMemo(() => {
@@ -241,6 +243,26 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
     return undefined;
   }, [basesLoaded, bases.length, disabledReason]);
 
+  useEffect(() => {
+    let disposed = false;
+    void configService.whenReady().then(() => {
+      if (!disposed) {
+        setKnowledgeMode(configService.get('enterprise.knowledgeMode') ?? 'personal');
+      }
+    });
+    const unsubscribe = configService.subscribe('enterprise.knowledgeMode', (value) => {
+      if (value === 'enterprise' || value === 'personal' || value === 'disabled') {
+        setKnowledgeMode(value);
+      } else {
+        setKnowledgeMode('personal');
+      }
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
   // ─── Load bases + binding ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -323,6 +345,7 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
   };
 
   const mountedCount = binding.enabled ? binding.kb_ids.length : 0;
+  const showWriteback = knowledgeMode === 'personal';
 
   // Filter bases by search query
   const filteredBases = useMemo(() => {
@@ -486,12 +509,6 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
         <div className='text-[var(--color-text-2)] text-11px leading-16px' style={lineClamp2Style}>
           {t('knowledge.control.hint')}
         </div>
-        <div
-          className='self-start text-11px font-600 text-[rgb(var(--primary-6))] cursor-pointer hover:underline'
-          onClick={() => navigate('/knowledge')}
-        >
-          {t('knowledge.mount.manage', { defaultValue: '管理知识库 ›' })}
-        </div>
       </div>
 
       {basesLoaded && bases.length === 0 ? (
@@ -505,12 +522,9 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
           </span>
           <p className='m-0 whitespace-pre-line text-12px text-[var(--color-text-2)] leading-17px'>
             {t('knowledge.mount.emptyHint', {
-              defaultValue: '你还没有任何知识库。\n知识库能给这个会话补上专属的领域知识。',
+              defaultValue: '你还没有任何个人资料库。\n个人资料库能给这个会话补上专属的领域知识。',
             })}
           </p>
-          <Button type='primary' size='small' shape='round' onClick={() => navigate('/knowledge')}>
-            {t('knowledge.mount.createFirst', { defaultValue: '＋ 新建第一个知识库' })}
-          </Button>
         </div>
       ) : (
         <>
@@ -530,8 +544,8 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
               className='knowledge-control-search'
               value={searchQuery}
               onChange={(v: string) => setSearchQuery(v)}
-              aria-label={t('knowledge.mount.searchPlaceholder', { defaultValue: '搜索 / 筛选知识库…' })}
-              placeholder={t('knowledge.mount.searchPlaceholder', { defaultValue: '搜索 / 筛选知识库…' })}
+              aria-label={t('knowledge.mount.searchPlaceholder', { defaultValue: '搜索 / 筛选个人资料库…' })}
+              placeholder={t('knowledge.mount.searchPlaceholder', { defaultValue: '搜索 / 筛选个人资料库…' })}
             />
           )}
 
@@ -539,11 +553,11 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
           <div className='flex min-h-0 flex-1 flex-col gap-8px overflow-y-auto'>
             {/* Mounted-bases section */}
             <div className={sectionClass}>
-              <span className={fieldLabelClass}>{t('knowledge.control.basesLabel', { defaultValue: '挂载的知识库' })}</span>
+              <span className={fieldLabelClass}>{t('knowledge.control.basesLabel', { defaultValue: '挂载的个人资料库' })}</span>
               <div className='flex flex-col gap-3px'>
                 {filteredBases.length === 0 ? (
                   <span className='py-4px text-[var(--color-text-2)] text-11px'>
-                    {t('knowledge.filterEmpty', { defaultValue: '没有匹配的知识库' })}
+                    {t('knowledge.filterEmpty', { defaultValue: '没有匹配的个人资料库' })}
                   </span>
                 ) : (
                   filteredBases.map(renderBaseRow)
@@ -551,15 +565,16 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
               </div>
             </div>
 
-            {/* Writeback section */}
+            {/* Writeback section — personal library only. Enterprise mode is search/citation only. */}
+            {showWriteback && (
             <div className={sectionClass}>
               <div className='flex items-center justify-between gap-10px'>
                 <span className='min-w-0 flex flex-col gap-2px'>
                   <span className='text-[var(--color-text-1)] text-13px font-600'>
-                    {t('knowledge.control.writeback', { defaultValue: '回血知识库' })}
+                    {t('knowledge.control.writeback', { defaultValue: '写回个人资料库' })}
                   </span>
                   <span className='text-[var(--color-text-2)] text-11px leading-15px'>
-                    {t('knowledge.mount.writebackDesc', { defaultValue: '让本会话把新学到的知识写回知识库' })}
+                    {t('knowledge.mount.writebackDesc', { defaultValue: '让本会话把新学到的知识写回个人资料库' })}
                   </span>
                 </span>
                 <Switch
@@ -612,6 +627,7 @@ const KnowledgeControl: React.FC<KnowledgeControlProps> = ({ target, draft, disa
                 </div>
               )}
             </div>
+            )}
 
             {applyNote && <div className='text-[var(--color-text-2)] text-11px leading-15px'>{applyNote}</div>}
           </div>

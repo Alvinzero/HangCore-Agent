@@ -8,6 +8,7 @@ pub mod agent_task;
 pub mod browser_fetcher;
 pub mod capability;
 pub mod cc_switch;
+pub mod enterprise_knowledge;
 pub mod factory;
 pub(crate) mod idle_scanner;
 pub mod knowledge_completer;
@@ -52,6 +53,9 @@ pub use factory::{AgentFactoryDeps, CompanionPromptProvider, build_agent_factory
 pub use idle_scanner::start_idle_scanner;
 #[cfg(feature = "browser-use")]
 pub use browser_fetcher::BrowserFetcher;
+pub use enterprise_knowledge::{
+    EnterpriseKnowledgeConfig, EnterpriseKnowledgeMode, EnterpriseKnowledgeRetrievalSink,
+};
 pub use knowledge_completer::LiveKnowledgeCompleter;
 pub use knowledge_retrieval::LiveKnowledgeRetrievalSink;
 pub use knowledge_writeback::LiveKnowledgeWritebackSink;

@@ -16,7 +16,7 @@ use nomifun_auth::{
 use nomifun_common::OnConversationDelete;
 use nomifun_conversation::runtime_state::ConversationRuntimeStateService;
 use nomifun_db::{
-    Database, IAcpSessionRepository, IAgentMetadataRepository, ICompanionTokenRepository,
+    Database, IAcpSessionRepository, IAgentMetadataRepository, IClientPreferenceRepository, ICompanionTokenRepository,
     IConversationRepository, IMcpServerRepository, IProviderRepository, IUserRepository,
     SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteCompanionTokenRepository,
     SqliteConversationRepository, SqliteMcpServerRepository, SqliteProviderRepository,
@@ -598,6 +598,17 @@ impl AppServices {
         let provider_repo_for_services: Arc<dyn IProviderRepository> =
             provider_repo.clone() as Arc<dyn nomifun_db::IProviderRepository>;
 
+        let client_prefs_repo: Arc<dyn IClientPreferenceRepository> =
+            Arc::new(nomifun_db::SqliteClientPreferenceRepository::new(database.pool().clone()));
+        let local_knowledge_retrieval = Arc::new(nomifun_ai_agent::LiveKnowledgeRetrievalSink {
+            service: knowledge_service.clone(),
+        });
+        let knowledge_retrieval = Arc::new(nomifun_ai_agent::EnterpriseKnowledgeRetrievalSink::new(
+            local_knowledge_retrieval,
+            Some(client_prefs_repo.clone()),
+            nomifun_net::http_client(),
+        ));
+
         let factory = build_agent_factory(AgentFactoryDeps {
             skill_manager: AcpSkillManager::new(skill_paths.clone()),
             remote_agent_repo,
@@ -619,10 +630,7 @@ impl AppServices {
             open_mcp_config: open_mcp_config.clone(),
             computer_mcp_config: computer_mcp_config.clone(),
             browser_mcp_config: browser_mcp_config.clone(),
-            client_prefs: Some(Arc::new(nomifun_db::SqliteClientPreferenceRepository::new(
-                database.pool().clone(),
-            ))
-                as Arc<dyn nomifun_db::IClientPreferenceRepository>),
+            client_prefs: Some(client_prefs_repo),
             // System settings repo: lets the nomi factory read the app UI language
             // live per build so companion-owned sessions reply in the app's
             // language instead of the old hardcoded Chinese (mirrors client_prefs).
@@ -643,13 +651,11 @@ impl AppServices {
             // Companion self-evolved skill auto-use (`companion_skill` tool + per-turn
             // when_to_use injection). Only registered for companion sessions (factory gates).
             companion_skill_sink: Some(companion_service.skill_sink()),
-            // Live knowledge_search sink: registers the retrieval tool over the
-            // shared KnowledgeService. The field's declared type
-            // `Option<Arc<dyn KnowledgeRetrievalSink>>` drives the unsized
-            // coercion, so no explicit `dyn` annotation is needed here.
-            knowledge_retrieval: Some(Arc::new(nomifun_ai_agent::LiveKnowledgeRetrievalSink {
-                service: knowledge_service.clone(),
-            })),
+            // Unified knowledge_search sink: enterprise mode queries the phase-1
+            // enterprise endpoint, personal mode delegates to the shared local
+            // KnowledgeService, and disabled mode leaves the tool unregistered
+            // by the per-session factory gate.
+            knowledge_retrieval: Some(knowledge_retrieval),
             // Live knowledge_write (回血) sink: registers the native write-back
             // tool over the same KnowledgeService. Gated downstream on bound
             // bases + write-back enabled, so a read-only session never sees it.

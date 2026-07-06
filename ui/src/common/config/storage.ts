@@ -78,6 +78,16 @@ export interface IConfigStorageRefer {
     /** @deprecated Image generation is now controlled via built-in MCP server toggle */
     switch?: boolean;
   };
+  /** Enable enterprise workbench integration / 启用企业工作台连接 */
+  'enterprise.enabled'?: boolean;
+  /** Enterprise service base URL / 企业服务端地址 */
+  'enterprise.baseUrl'?: string;
+  /** Enterprise workspace/tenant id / 企业工作区 ID */
+  'enterprise.workspaceId'?: string;
+  /** Temporary phase-1 enterprise auth token storage; migrate to encrypted credentials later. */
+  'enterprise.authToken'?: string;
+  /** Knowledge source mode: enterprise search, personal local library, or disabled. */
+  'enterprise.knowledgeMode'?: 'enterprise' | 'personal' | 'disabled';
   'tools.speechToText'?: SpeechToTextConfig;
   // 是否在粘贴文件到工作区时询问确认（true = 不再询问）
   'workspace.pasteConfirm'?: boolean;

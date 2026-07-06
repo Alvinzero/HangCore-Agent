@@ -14,13 +14,14 @@ describe('settings navigation', () => {
     const siderSource = readSource(new URL('./SettingsSider.tsx', import.meta.url));
     const pageWrapperSource = readSource(new URL('./SettingsPageWrapper.tsx', import.meta.url));
 
-    for (const id of ['system', 'agent-runtime', 'browser-use', 'computer-use', 'about']) {
+    for (const id of ['system', 'agent-runtime', 'enterprise', 'browser-use', 'computer-use', 'about']) {
       expect(siderSource.includes(`'${id}'`)).toBe(true);
       expect(pageWrapperSource.includes(`id: '${id}'`)).toBe(true);
     }
 
     expect(siderSource.indexOf("'system'")).toBeLessThan(siderSource.indexOf("'agent-runtime'"));
-    expect(siderSource.indexOf("'agent-runtime'")).toBeLessThan(siderSource.indexOf("'browser-use'"));
+    expect(siderSource.indexOf("'agent-runtime'")).toBeLessThan(siderSource.indexOf("'enterprise'"));
+    expect(siderSource.indexOf("'enterprise'")).toBeLessThan(siderSource.indexOf("'browser-use'"));
     expect(siderSource.indexOf("'browser-use'")).toBeLessThan(siderSource.indexOf("'computer-use'"));
     expect(siderSource.indexOf("'computer-use'")).toBeLessThan(siderSource.indexOf("'about'"));
   });
@@ -28,7 +29,7 @@ describe('settings navigation', () => {
   test('routes capability settings without redirecting them back to System', () => {
     const routerSource = readSource(new URL('../../../components/layout/Router.tsx', import.meta.url));
 
-    for (const path of ['/settings/agent-runtime', '/settings/browser-use', '/settings/computer-use']) {
+    for (const path of ['/settings/agent-runtime', '/settings/enterprise', '/settings/browser-use', '/settings/computer-use']) {
       expect(routerSource.includes(`path='${path}'`)).toBe(true);
     }
 

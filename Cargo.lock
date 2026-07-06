@@ -5291,6 +5291,7 @@ dependencies = [
  "nomifun-secret",
  "nomifun-terminal",
  "regex",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",

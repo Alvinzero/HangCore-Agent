@@ -24,8 +24,6 @@ const SourcesPage = React.lazy(() => import('@renderer/pages/requirements/Source
 const TerminalSessionPage = React.lazy(() => import('@renderer/pages/terminal/TerminalSessionPage'));
 const TerminalCreatePage = React.lazy(() => import('@renderer/pages/terminal/TerminalCreatePage'));
 const NomiConfigPage = React.lazy(() => import('@renderer/pages/nomi'));
-const KnowledgeListPage = React.lazy(() => import('@renderer/pages/knowledge/KnowledgeListPage'));
-const KnowledgeDetailPage = React.lazy(() => import('@renderer/pages/knowledge/KnowledgeDetailPage'));
 const CompanionPage = React.lazy(() => import('@renderer/pages/companion'));
 const ConversationShell = React.lazy(() => import('@renderer/pages/conversation/components/ConversationShell'));
 
@@ -191,6 +189,7 @@ const PanelRoute: React.FC<{ layout: React.ReactElement }> = ({ layout }) => {
           <Route path='/settings/webui' element={<Navigate to='/open-capabilities' replace />} />
           <Route path='/settings/system' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/agent-runtime' element={withRouteFallback(SystemSettings)} />
+          <Route path='/settings/enterprise' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/browser-use' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/computer-use' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/about' element={withRouteFallback(SystemSettings)} />
@@ -217,8 +216,8 @@ const PanelRoute: React.FC<{ layout: React.ReactElement }> = ({ layout }) => {
           {/* Webhook config relocated into 扩展能力 */}
           <Route path='/other' element={<Navigate to='/requirements/extensions?tab=notify' replace />} />
           <Route path='/nomi' element={withRouteFallback(NomiConfigPage)} />
-          <Route path='/knowledge' element={withRouteFallback(KnowledgeListPage)} />
-          <Route path='/knowledge/:id' element={withRouteFallback(KnowledgeDetailPage)} />
+          <Route path='/knowledge' element={<Navigate to='/settings/enterprise' replace />} />
+          <Route path='/knowledge/:id' element={<Navigate to='/settings/enterprise' replace />} />
         </Route>
         <Route path='*' element={<Navigate to={status === 'authenticated' ? '/guid' : '/login'} replace />} />
       </Routes>

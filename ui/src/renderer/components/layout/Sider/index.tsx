@@ -12,11 +12,9 @@ import { useAuth } from '@renderer/hooks/context/AuthContext';
 import { useLayoutContext } from '@renderer/hooks/context/LayoutContext';
 import { blurActiveElement } from '@renderer/utils/ui/focus';
 import { isDesktopShell } from '@renderer/utils/platform';
-import { useKnowledgeInboxPending } from '@renderer/pages/knowledge/useKnowledge';
 import {
   SiderAssistantSkillsEntry,
   SiderConversationEntry,
-  SiderKnowledgeEntry,
   SiderMcpEntry,
   SiderModelHubEntry,
   SiderNomiEntry,
@@ -42,8 +40,8 @@ interface SiderProps {
  * content-area secondary sidebar (`ConversationShell` / `ContentSider`),
  * reached via the "会话" entry. The rail holds top-level destinations grouped
  * by small-text section headers (`SiderSectionHeader`): 常用 (会话 / 桌面伙伴),
- * 数据空间 (知识库), 自动化 (定时任务 / 需求平台),
- * 增强工具 (助手&Skill / MCP), and a bottom-pinned 设置 group
+ * 自动化 (定时任务 / 需求平台), 增强工具 (助手&Skill / MCP),
+ * and a bottom-pinned 设置 group
  * (模型&Agent + the footer).
  */
 const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
@@ -52,7 +50,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
   const isMobile = layout?.isMobile ?? false;
   const location = useLocation();
   const { pathname, search, hash } = location;
-  const { count: pendingInboxCount } = useKnowledgeInboxPending();
 
   const navigate = useNavigate();
   const { logout, status } = useAuth();
@@ -85,7 +82,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
   const handleConversationClick = () => navTo('/guid');
   const handleScheduledClick = () => navTo('/scheduled');
   const handleRequirementsClick = () => navTo('/requirements');
-  const handleKnowledgeClick = () => navTo('/knowledge');
   const handleNomiClick = () => navTo('/nomi');
   const handleAssistantSkillsClick = () => navTo('/assistants?tab=assistants');
   const handleMcpClick = () => navTo('/mcp');
@@ -177,17 +173,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
               collapsed={collapsed}
               siderTooltipProps={siderTooltipProps}
               onClick={handleNomiClick}
-            />
-            {/* 数据空间 — data & storage (文件管理 reserved for later) */}
-            <SiderSectionHeader label={t('common.siderSection.data')} collapsed={collapsed} />
-            {/* Knowledge base */}
-            <SiderKnowledgeEntry
-              isMobile={isMobile}
-              isActive={pathname.startsWith('/knowledge')}
-              collapsed={collapsed}
-              siderTooltipProps={siderTooltipProps}
-              onClick={handleKnowledgeClick}
-              dot={pendingInboxCount > 0}
             />
             {/* 自动化 — automation platforms */}
             <SiderSectionHeader label={t('common.siderSection.automation')} collapsed={collapsed} />

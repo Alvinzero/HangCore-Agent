@@ -11,8 +11,8 @@
     "idmmApplyFailed": "Terminal created, but Smart Decision failed to enable — retry inside the terminal",
     "idmmApplyNote": "Takes effect as soon as the terminal is created; you can adjust it inside the terminal.",
     "knowledgeConnectNote": "Built-in Claude / Codex auto-inject on mount; for wrapper / custom / external commands, use One-click Connect to write into the workspace.",
-    "knowledgeDesc": "Mount knowledge bases into the workspace for this terminal's agent to search.",
-    "knowledgeLabel": "Platform Knowledge",
+    "knowledgeDesc": "Select knowledge sources in the workspace for this terminal's agent to search.",
+    "knowledgeLabel": "Knowledge Source",
     "subtitle": "Expose platform capabilities to the agent CLI launched in this terminal",
     "title": "Extended Capabilities"
   },
@@ -33,8 +33,8 @@
     "interrupt": "Send Ctrl-C (interrupt)"
   },
   "registerKnowledge": {
-    "button": "Connect platform knowledge",
-    "buttonCompact": "Connect knowledge",
+    "button": "Connect knowledge source",
+    "buttonCompact": "Connect source",
     "confirm": "Connect",
     "cwdRequired": "Please select a working directory first",
     "familyNote": {
@@ -43,7 +43,7 @@
       "gemini": "Writes project config file"
     },
     "modalDesc": "Choose the CLI type to write the knowledge MCP into the workspace config.",
-    "modalTitle": "Connect Platform Knowledge"
+    "modalTitle": "Connect Knowledge Source"
   },
   "preset": {
     "shell": "Custom",
@@ -63,8 +63,8 @@
     "permission": "Permission mode",
     "permissionDefault": "Ask for approvals",
     "permissionFullAuto": "Full auto (skip approvals)",
-    "knowledge": "Knowledge bases",
-    "knowledgePlaceholder": "Optional — pick knowledge bases to mount",
+    "knowledge": "Knowledge Source",
+    "knowledgePlaceholder": "Optional — pick personal libraries to mount",
     "knowledgeHint": "Mounted into .nomi/knowledge/ under the working directory; the session reads them as an extended knowledge source.",
     "command": "Launch command",
     "commandHint": "You can customize the launch command; it will be injected automatically when the terminal is created.",
@@ -72,7 +72,7 @@
       "claudeCmd": "Claude command",
       "claudeJson": "Claude .mcp.json",
       "codexToml": "Codex config.toml",
-      "description": "Using a custom or external terminal? Register the snippet below into your CLI to use the platform knowledge base in that terminal. Credentials are fetched at runtime by the bridge and never written into your config. Requires NomiFun desktop to be running.",
+      "description": "Using a custom or external terminal? Register the snippet below into your CLI to use knowledge-source search in that terminal. Credentials are fetched at runtime by the bridge and never written into your config. Requires NomiFun desktop to be running.",
       "geminiJson": "Gemini settings.json",
       "loading": "Loading...",
       "title": "Advanced: manual registration for other CLIs / external terminals",

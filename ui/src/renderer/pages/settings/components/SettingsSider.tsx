@@ -22,7 +22,7 @@ import { Tooltip } from '@arco-design/web-react';
 import { getSiderTooltipProps } from '@/renderer/utils/ui/siderTooltip';
 
 /** Builtin settings tab IDs in display order (must match router paths). */
-export const BUILTIN_TAB_IDS = ['system', 'agent-runtime', 'browser-use', 'computer-use', 'about'] as const;
+export const BUILTIN_TAB_IDS = ['system', 'agent-runtime', 'enterprise', 'browser-use', 'computer-use', 'about'] as const;
 
 /**
  * Legacy anchor IDs that have been merged into other tabs.
@@ -92,6 +92,12 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
         label: t('settings.agentRuntime'),
         icon: <Speed />,
         path: 'agent-runtime',
+      },
+      enterprise: {
+        id: 'enterprise',
+        label: t('settings.enterprise.title', { defaultValue: '企业连接' }),
+        icon: <LinkCloud />,
+        path: 'enterprise',
       },
       'browser-use': {
         id: 'browser-use',
