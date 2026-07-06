@@ -85,4 +85,5 @@
 
 ## 6. 下一版本候选
 
-- `v0.1.10`: CodingTask + SpecArtifact 最小结构化保存。
+- `v0.1.10`: CodingTask + SpecArtifact MVP。新增任务主记录、Spec / Plan / Tasks 结构化产物、会话绑定和最小展示，不在本版进入 MCU 编译、烧录、自动修复或 32 位 Profile。
+- `v0.1.11`: 8 位 MCU 工具链 Adapter 预研。基于 `v0.1.10` 的任务追溯链定义 ToolchainProfile / ToolchainRun 和高风险命令审批边界。
