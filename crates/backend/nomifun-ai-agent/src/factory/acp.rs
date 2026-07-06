@@ -16,7 +16,7 @@ use nomifun_common::{AppError, CommandSpec, EnvVar};
 use nomifun_db::{IMcpServerRepository, IProviderRepository};
 use nomifun_db::models::{McpServerRow, Provider};
 use nomifun_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
-use nomifun_runtime::resolve_command_path;
+use nomifun_runtime::{managed_kun_runtime_dir, resolve_command_path};
 use tracing::{info, warn};
 
 pub(super) async fn build(
@@ -153,6 +153,14 @@ pub(super) async fn build(
         }
     }
     if meta.backend.as_deref() == Some("kun") {
+        if let Some(runtime_dir) =
+            append_managed_kun_runtime_env(&mut env, managed_kun_runtime_dir())
+        {
+            info!(
+                runtime_dir = %runtime_dir.display(),
+                "kun: managed runtime env injected"
+            );
+        }
         match inject_default_kun_provider_env(&deps.provider_repo, &deps.encryption_key, &mut env)
             .await?
         {
@@ -365,6 +373,26 @@ fn append_kun_provider_env(
     } else {
         push_env(env, "OPENAI_API_KEY", &fields.api_key);
     }
+}
+
+fn append_managed_kun_runtime_env(
+    env: &mut Vec<EnvVar>,
+    runtime_dir: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if has_nonempty_env(env, "HANGCORE_MANAGED_KUN_RUNTIME_DIR")
+        || has_nonempty_env(env, "KUN_SOURCE_DIR")
+    {
+        return None;
+    }
+    let runtime_dir = runtime_dir?;
+    let value = runtime_dir.to_string_lossy().into_owned();
+    push_env(env, "HANGCORE_MANAGED_KUN_RUNTIME_DIR", &value);
+    Some(runtime_dir)
+}
+
+fn has_nonempty_env(env: &[EnvVar], name: &str) -> bool {
+    env.iter()
+        .any(|item| item.name == name && !item.value.trim().is_empty())
 }
 
 fn push_env(env: &mut Vec<EnvVar>, name: &str, value: &str) {
@@ -806,6 +834,36 @@ mod tests {
         assert_env(&env, "API_KEY", "sk-test");
         assert_env(&env, "BASE_URL", "https://api.example.com/v1");
         assert_env(&env, "MODEL", "gpt-4o");
+    }
+
+    #[test]
+    fn kun_runtime_env_injects_managed_runtime_dir_when_resolved() {
+        let managed_dir = tempfile::TempDir::new().unwrap();
+        let expected = managed_dir.path().to_string_lossy().into_owned();
+        let mut env = Vec::new();
+
+        append_managed_kun_runtime_env(&mut env, Some(managed_dir.path().to_path_buf()));
+
+        assert_env(&env, "HANGCORE_MANAGED_KUN_RUNTIME_DIR", &expected);
+    }
+
+    #[test]
+    fn kun_runtime_env_keeps_explicit_catalog_value() {
+        let mut env = vec![nomifun_common::EnvVar {
+            name: "HANGCORE_MANAGED_KUN_RUNTIME_DIR".to_owned(),
+            value: "C:/custom/kun-runtime".to_owned(),
+        }];
+
+        append_managed_kun_runtime_env(
+            &mut env,
+            Some(std::path::PathBuf::from("C:/bundled/kun-runtime")),
+        );
+
+        assert_env(
+            &env,
+            "HANGCORE_MANAGED_KUN_RUNTIME_DIR",
+            "C:/custom/kun-runtime",
+        );
     }
 
     fn provider_row(

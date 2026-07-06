@@ -246,6 +246,29 @@ fn bundled_adapter_bins() -> Vec<PathBuf> {
     dedupe_existing_dirs(candidates)
 }
 
+pub fn managed_kun_runtime_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(raw) = std::env::var("HANGCORE_MANAGED_KUN_RUNTIME_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("managed-runtimes").join("kun"));
+    }
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.extend(managed_kun_runtime_candidates_from_exe_dir(exe_dir));
+    }
+
+    select_managed_kun_runtime_dir(candidates)
+}
+
 fn adapter_bin_candidates_from_exe_dir(exe_dir: &Path) -> Vec<PathBuf> {
     let rel = Path::new("adapters").join("kun-acp-adapter").join("bin");
     let encoded_rel = Path::new("_up_")
@@ -268,6 +291,47 @@ fn adapter_bin_candidates_from_exe_dir(exe_dir: &Path) -> Vec<PathBuf> {
         candidates.push(parent.join("Resources").join(&encoded_rel));
     }
     candidates
+}
+
+fn managed_kun_runtime_candidates_from_exe_dir(exe_dir: &Path) -> Vec<PathBuf> {
+    let rel = Path::new("managed-runtimes").join("kun");
+    let encoded_rel = Path::new("_up_").join("_up_").join(&rel);
+    let mut candidates = vec![
+        exe_dir.join(&rel),
+        exe_dir.join("resources").join(&rel),
+        exe_dir.join("resources").join(&encoded_rel),
+        exe_dir.join("Resources").join(&rel),
+        exe_dir.join("Resources").join(&encoded_rel),
+    ];
+    if let Some(parent) = exe_dir.parent() {
+        candidates.push(parent.join("Resources").join(&rel));
+        candidates.push(parent.join("Resources").join(&encoded_rel));
+    }
+    candidates
+}
+
+fn select_managed_kun_runtime_dir(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    candidates.into_iter().find_map(|candidate| {
+        if !seen.insert(candidate.clone()) {
+            return None;
+        }
+        if is_managed_kun_runtime_dir(&candidate) {
+            Some(candidate)
+        } else {
+            None
+        }
+    })
+}
+
+fn is_managed_kun_runtime_dir(candidate: &Path) -> bool {
+    candidate.join("kun").join("package.json").is_file()
+        && candidate
+            .join("kun")
+            .join("dist")
+            .join("cli")
+            .join("serve-entry.js")
+            .is_file()
 }
 
 fn dedupe_existing_dirs(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -694,6 +758,63 @@ mod tests {
                 .any(|p| p.ends_with(tail(&["resources", "_up_", "_up_", "adapters", "kun-acp-adapter", "bin"]))),
             "expected encoded _up_ resource path in {candidates:?}"
         );
+    }
+
+    #[test]
+    fn managed_kun_runtime_candidates_cover_tauri_resource_layouts() {
+        let exe_dir = Path::new("C:/Program Files/HangCore Agent");
+        let candidates = managed_kun_runtime_candidates_from_exe_dir(exe_dir);
+        let tail = |segs: &[&str]| segs.iter().collect::<PathBuf>();
+
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(tail(&["resources", "managed-runtimes", "kun"]))),
+            "expected resources/managed-runtimes/kun in {candidates:?}"
+        );
+        assert!(
+            candidates.iter().any(|p| {
+                p.ends_with(tail(&[
+                    "resources",
+                    "_up_",
+                    "_up_",
+                    "managed-runtimes",
+                    "kun",
+                ]))
+            }),
+            "expected encoded _up_ resource path in {candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p.ends_with(tail(&["Resources", "managed-runtimes", "kun"]))),
+            "expected macOS Resources/managed-runtimes/kun in {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn select_managed_kun_runtime_dir_requires_kun_entrypoint() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let incomplete = tmp.path().join("incomplete");
+        std::fs::create_dir_all(incomplete.join("kun")).unwrap();
+        std::fs::write(incomplete.join("kun").join("package.json"), "{}").unwrap();
+
+        let managed = tmp.path().join("managed-runtimes").join("kun");
+        std::fs::create_dir_all(managed.join("kun").join("dist").join("cli")).unwrap();
+        std::fs::write(managed.join("kun").join("package.json"), "{}").unwrap();
+        std::fs::write(
+            managed
+                .join("kun")
+                .join("dist")
+                .join("cli")
+                .join("serve-entry.js"),
+            "",
+        )
+        .unwrap();
+
+        let selected = select_managed_kun_runtime_dir(vec![incomplete, managed.clone()]);
+
+        assert_eq!(selected, Some(managed));
     }
 
     #[cfg(unix)]
