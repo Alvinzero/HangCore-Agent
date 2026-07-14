@@ -7,10 +7,9 @@
 
 import type { IProvider, TProviderWithModel } from '@/common/config/storage';
 import { configService } from '@/common/config/configService';
-import { useGoogleAuthModels } from '@/renderer/hooks/agent/useGoogleAuthModels';
-import { useProvidersQuery } from '@/renderer/hooks/agent/useModelProviderList';
-import { getAvailableModels, hasAvailableModels } from '../utils/modelUtils';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useModelProviderList } from '@/renderer/hooks/agent/useModelProviderList';
+import { getAvailableModels } from '../utils/modelUtils';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * Build a unique key for a provider/model pair.
@@ -52,13 +51,7 @@ export type GuidModelSelectionResult = {
  * @param agentKey - current provider-based agent (currently only 'nomi')
  */
 export const useGuidModelSelection = (agentKey: ProviderAgentKey = 'nomi'): GuidModelSelectionResult => {
-  const { isGoogleAuth } = useGoogleAuthModels();
-  const { data: modelConfig } = useProvidersQuery();
-
-  const modelList = useMemo(() => {
-    const allProviders: IProvider[] = (modelConfig || []).filter((platform) => !!platform.models.length);
-    return allProviders.filter(hasAvailableModels);
-  }, [modelConfig]);
+  const { providers: modelList, isGoogleAuth } = useModelProviderList();
 
   const formatGeminiModelLabel = useCallback((_provider: { platform?: string } | undefined, modelName?: string) => {
     if (!modelName) return '';

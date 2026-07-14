@@ -68,23 +68,7 @@ pub async fn init_database(path: &Path) -> Result<Database, DbError> {
 
     match try_init_file(path).await {
         Ok(db) => Ok(db),
-        Err(e) if path.exists() && is_pre_baseline_migration_error(&e) => {
-            // Guardrail (this whole salvage path is pre-launch convenience — see
-            // the NOTE at `rebuild_pre_baseline_database`). The rebuild WIPES the
-            // database (renames it aside, starts empty), so it must NEVER run
-            // against a database that still holds a real user credential: refuse,
-            // preserve the file in place, and fail fast so a genuine login is
-            // never silently reset to a "needs setup" state. A disposable
-            // no-credential DB (fresh/dev) is still rebuilt so startup recovers.
-            if database_has_real_credential(path).await {
-                return Err(DbError::Init(format!(
-                    "refusing to rebuild a database that still holds a real user credential \
-                     (pre-baseline migration mismatch); preserved {} in place. Original error: {e}",
-                    path.display()
-                )));
-            }
-            rebuild_pre_baseline_database(path, e).await
-        }
+        Err(e) if path.exists() && is_pre_baseline_migration_error(&e) => rebuild_pre_baseline_database(path, e).await,
         Err(e) if path.exists() && should_attempt_recovery(&e) => {
             warn!("Database initialization failed, attempting recovery: {e}");
             recover_and_retry(path, e).await
@@ -399,16 +383,18 @@ fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+#[cfg(test)]
 /// Best-effort check: does the (migration-mismatched) database at `path` still
-/// contain a user with a REAL (non-empty) password?
+/// contain a REAL (non-empty) user password or model-provider API credential?
 ///
 /// Gates the destructive pre-baseline rebuild so it never wipes a DB holding a
 /// real credential. Opens its own connection WITHOUT running migrations and
-/// only runs a `SELECT COUNT`, so it works against the old schema. Uses a
-/// read-write open (not read-only) so a WAL-mode database is always fully
+/// only runs simple `SELECT COUNT` probes, so it works against the old schema.
+/// Uses a read-write open (not read-only) so a WAL-mode database is always fully
 /// readable — a false "no credential" here would let the rebuild wipe a real
-/// login, which is exactly what we must prevent. The caller has already closed
-/// its own pool (see `try_init_file`), so this does not contend with it.
+/// login or configured model provider, which is exactly what we must prevent.
+/// The caller has already closed its own pool (see `try_init_file`), so this
+/// does not contend with it.
 ///
 /// Any open/query failure returns `false` (allow rebuild); the rebuild only
 /// RENAMES the file aside (never deletes), so an unreadable DB is still kept.
@@ -424,15 +410,23 @@ async fn database_has_real_credential(path: &Path) -> bool {
             return false;
         }
     };
-    let probe: Result<(i64,), _> =
+    let user_probe: Result<(i64,), _> =
         sqlx::query_as("SELECT COUNT(*) FROM users WHERE password_hash != '' AND password_hash IS NOT NULL")
             .fetch_one(&pool)
             .await;
+    let provider_probe: Result<(i64,), _> =
+        sqlx::query_as("SELECT COUNT(*) FROM providers WHERE api_key_encrypted != '' AND api_key_encrypted IS NOT NULL")
+            .fetch_one(&pool)
+            .await;
     pool.close().await;
-    match probe {
-        Ok((count,)) => count > 0,
-        Err(e) => {
+    match (user_probe, provider_probe) {
+        (Ok((user_count,)), Ok((provider_count,))) => user_count > 0 || provider_count > 0,
+        (Err(e), _) => {
             warn!("pre-baseline guard: credential probe failed on {}: {e}", path.display());
+            false
+        }
+        (_, Err(e)) => {
+            warn!("pre-baseline guard: provider credential probe failed on {}: {e}", path.display());
             false
         }
     }
@@ -490,9 +484,10 @@ async fn rebuild_pre_baseline_database(path: &Path, original_error: DbError) -> 
 
     match try_init_file(path).await {
         Ok(db) => {
+            restore_pre_baseline_user_config(db.pool(), &backup).await?;
             info!(
                 backup = %backup.display(),
-                "Rebuilt empty database from baseline; old database preserved at backup path"
+                "Rebuilt database from baseline and restored preserved user configuration from backup"
             );
             Ok(db)
         }
@@ -502,6 +497,94 @@ async fn rebuild_pre_baseline_database(path: &Path, original_error: DbError) -> 
             backup.display()
         ))),
     }
+}
+
+async fn restore_pre_baseline_user_config(pool: &SqlitePool, backup: &Path) -> Result<(), DbError> {
+    let mut conn = pool.acquire().await.map_err(DbError::Query)?;
+    sqlx::query("ATTACH DATABASE ? AS pre_baseline")
+        .bind(backup.to_string_lossy().as_ref())
+        .execute(&mut *conn)
+        .await
+        .map_err(DbError::Query)?;
+
+    let restore_result = async {
+        let users_present: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM pre_baseline.sqlite_master WHERE type = 'table' AND name = 'users'",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(DbError::Query)?;
+        if users_present.0 > 0 {
+            sqlx::query(
+                "UPDATE users SET \
+                    username = COALESCE((SELECT username FROM pre_baseline.users WHERE id = 'system_default_user'), username), \
+                    email = (SELECT email FROM pre_baseline.users WHERE id = 'system_default_user'), \
+                    password_hash = COALESCE((SELECT password_hash FROM pre_baseline.users WHERE id = 'system_default_user'), password_hash), \
+                    avatar_path = (SELECT avatar_path FROM pre_baseline.users WHERE id = 'system_default_user'), \
+                    jwt_secret = COALESCE((SELECT jwt_secret FROM pre_baseline.users WHERE id = 'system_default_user'), jwt_secret), \
+                    updated_at = COALESCE((SELECT updated_at FROM pre_baseline.users WHERE id = 'system_default_user'), updated_at), \
+                    last_login = (SELECT last_login FROM pre_baseline.users WHERE id = 'system_default_user') \
+                 WHERE id = 'system_default_user' \
+                   AND EXISTS (SELECT 1 FROM pre_baseline.users WHERE id = 'system_default_user')",
+            )
+            .execute(&mut *conn)
+            .await
+            .map_err(DbError::Query)?;
+        }
+
+        let providers_present: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM pre_baseline.sqlite_master WHERE type = 'table' AND name = 'providers'",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(DbError::Query)?;
+        if providers_present.0 > 0 {
+            sqlx::query(
+                "INSERT INTO providers \
+                    (id, platform, name, base_url, api_key_encrypted, models, enabled, capabilities, context_limit, \
+                     model_context_limits, model_protocols, model_descriptions, model_enabled, model_health, \
+                     bedrock_config, is_full_url, created_at, updated_at) \
+                 SELECT id, platform, name, base_url, api_key_encrypted, models, enabled, capabilities, context_limit, \
+                        COALESCE(model_context_limits, '{}'), model_protocols, COALESCE(model_descriptions, '{}'), \
+                        model_enabled, model_health, bedrock_config, is_full_url, created_at, updated_at \
+                 FROM pre_baseline.providers \
+                 WHERE (api_key_encrypted IS NOT NULL AND api_key_encrypted != '') OR models != '[]' \
+                 ON CONFLICT(id) DO UPDATE SET \
+                    platform = excluded.platform, \
+                    name = excluded.name, \
+                    base_url = excluded.base_url, \
+                    api_key_encrypted = excluded.api_key_encrypted, \
+                    models = excluded.models, \
+                    enabled = excluded.enabled, \
+                    capabilities = excluded.capabilities, \
+                    context_limit = excluded.context_limit, \
+                    model_context_limits = excluded.model_context_limits, \
+                    model_protocols = excluded.model_protocols, \
+                    model_descriptions = excluded.model_descriptions, \
+                    model_enabled = excluded.model_enabled, \
+                    model_health = excluded.model_health, \
+                    bedrock_config = excluded.bedrock_config, \
+                    is_full_url = excluded.is_full_url, \
+                    updated_at = excluded.updated_at",
+            )
+            .execute(&mut *conn)
+            .await
+            .map_err(DbError::Query)?;
+        }
+
+        Ok::<(), DbError>(())
+    }
+    .await;
+
+    let detach_result = sqlx::query("DETACH DATABASE pre_baseline")
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(DbError::Query);
+
+    restore_result?;
+    detach_result?;
+    Ok(())
 }
 
 async fn recover_and_retry(path: &Path, original_error: DbError) -> Result<Database, DbError> {

@@ -68,10 +68,10 @@
   "historyBack": "后退",
   "more": "更多",
   "refresh": "刷新",
-  "tray.showWindow": "显示 NomiFun",
+  "tray.showWindow": "显示 HK AI Platform",
   "tray.newChat": "新建对话",
   "tray.closeToTray": "隐藏到托盘",
-  "tray.about": "关于 NomiFun",
+  "tray.about": "关于 HK AI Platform",
   "tray.restart": "重启应用",
   "tray.quit": "退出",
   "tray.runningTasks": "运行中的任务",
@@ -82,12 +82,12 @@
   "backendStartup": {
     "incompatibleRuntime": {
       "title": "当前系统不支持内置后端",
-      "description": "NomiFun 已打开，但本地 NomiFun 后端无法在当前 Linux 版本上运行。请升级到受支持的 Linux 发行版后重启 NomiFun。",
+      "description": "HK AI Platform 已打开，但本地 HK AI Platform 后端无法在当前 Linux 版本上运行。请升级到受支持的 Linux 发行版后重启 HK AI Platform。",
       "requiredVersions": "需要的运行时符号：{{versions}}"
     },
     "incompleteInstallation": {
-      "title": "NomiFun 安装不完整",
-      "description": "当前安装缺少必要的本地资源，NomiFun 无法启动。请下载并重新安装最新版 NomiFun；如果重新安装后仍然出现，请检查系统安全软件或杀毒软件是否隔离了 NomiFun。",
+      "title": "HK AI Platform 安装不完整",
+      "description": "当前安装缺少必要的本地资源，HK AI Platform 无法启动。请下载并重新安装最新版 HK AI Platform；如果重新安装后仍然出现，请检查系统安全软件或杀毒软件是否隔离了 HK AI Platform。",
       "downloadLatest": "下载最新版",
       "sendDiagnostics": "发送诊断报告"
     }

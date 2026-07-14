@@ -23,6 +23,7 @@ import { getAgentModes, getFullAutoMode } from '@/renderer/utils/model/agentMode
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
 import { savePreferredMode, savePreferredModelId, getAgentKey as getAgentKeyUtil } from './agentSelectionUtils';
+import { buildKunProviderModelInfo } from '../utils/kunProviderModelInfo';
 import { usePresetAssistantResolver } from './usePresetAssistantResolver';
 import { useAgentAvailability } from './useAgentAvailability';
 import { useCustomAgentsLoader } from './useCustomAgentsLoader';
@@ -429,6 +430,16 @@ export const useGuidAgentSelection = ({
 
     const config = configService.get('acp.config');
     const preferred = (config?.[backend as string] as Record<string, unknown>)?.preferredModelId as string | undefined;
+    if (backend === 'kun') {
+      const kunModels = buildKunProviderModelInfo(modelList);
+      if (preferred && kunModels?.available_models.some((model) => model.id === preferred)) {
+        _setSelectedAcpModel(preferred);
+        return;
+      }
+      _setSelectedAcpModel(kunModels?.current_model_id ?? null);
+      return;
+    }
+
     if (preferred) {
       _setSelectedAcpModel(preferred);
       return;
@@ -438,7 +449,7 @@ export const useGuidAgentSelection = ({
     const matched = metadataAgents?.find((a) => (a.backend ?? a.agent_type) === backend);
     const handshakeModels = matched?.handshake?.available_models as AcpModelInfo | undefined;
     _setSelectedAcpModel(handshakeModels?.current_model_id ?? null);
-  }, [selectedAgentKey, availableAgentsData, is_presetAgent, currentEffectiveAgentInfo.agent_type, assistants, selectedAgentInfo?.custom_agent_id]);
+  }, [selectedAgentKey, availableAgentsData, is_presetAgent, currentEffectiveAgentInfo.agent_type, assistants, selectedAgentInfo?.custom_agent_id, modelList]);
 
   // Read preferred mode or fallback to legacy yoloMode config
   useEffect(() => {
@@ -525,6 +536,10 @@ export const useGuidAgentSelection = ({
     // the agent_metadata row, so this is populated across restarts without
     // requiring a fresh session.
     const metadataAgents = availableAgentsData as unknown as AgentMetadata[] | undefined;
+    if (backend === 'kun') {
+      return buildKunProviderModelInfo(modelList);
+    }
+
     const matched = metadataAgents?.find((a) => (a.backend ?? a.agent_type) === backend);
     const handshakeModels = matched?.handshake?.available_models as AcpModelInfo | undefined;
     if (
@@ -547,7 +562,7 @@ export const useGuidAgentSelection = ({
     }
 
     return null;
-  }, [selectedAgentKey, is_presetAgent, currentEffectiveAgentInfo.agent_type, availableAgentsData]);
+  }, [selectedAgentKey, is_presetAgent, currentEffectiveAgentInfo.agent_type, availableAgentsData, modelList]);
 
   // Key of the first non-preset CLI agent (used as fallback when leaving preset mode)
   const defaultAgentKey = useMemo(() => {

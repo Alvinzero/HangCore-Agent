@@ -68,10 +68,10 @@
   "historyBack": "Back",
   "more": "More",
   "refresh": "Refresh",
-  "tray.showWindow": "Show NomiFun",
+  "tray.showWindow": "Show HK AI Platform",
   "tray.newChat": "New Chat",
   "tray.closeToTray": "Hide to Tray",
-  "tray.about": "About NomiFun",
+  "tray.about": "About HK AI Platform",
   "tray.restart": "Restart App",
   "tray.quit": "Quit",
   "tray.runningTasks": "Running Tasks",
@@ -82,12 +82,12 @@
   "backendStartup": {
     "incompatibleRuntime": {
       "title": "This system is not supported by the bundled backend",
-      "description": "NomiFun opened, but the local NomiFun backend cannot run on this Linux version. Please upgrade to a supported Linux distribution and restart NomiFun.",
+      "description": "HK AI Platform opened, but the local HK AI Platform backend cannot run on this Linux version. Please upgrade to a supported Linux distribution and restart HK AI Platform.",
       "requiredVersions": "Required runtime symbols: {{versions}}"
     },
     "incompleteInstallation": {
-      "title": "NomiFun installation is incomplete",
-      "description": "This installation is missing required local resources, so NomiFun cannot start. Please download and reinstall the latest NomiFun. If the issue returns after reinstalling, check whether security or antivirus software quarantined NomiFun.",
+      "title": "HK AI Platform installation is incomplete",
+      "description": "This installation is missing required local resources, so HK AI Platform cannot start. Please download and reinstall the latest HK AI Platform. If the issue returns after reinstalling, check whether security or antivirus software quarantined HK AI Platform.",
       "downloadLatest": "Download latest",
       "sendDiagnostics": "Send diagnostics"
     }

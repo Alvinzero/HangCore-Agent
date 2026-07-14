@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "HangCore Agent",
+  "productName": "HK AI Platform",
   "identifier": "com.hangshun.hangcoreagent",
   "build": {
     "frontendDist": "../../ui/dist",

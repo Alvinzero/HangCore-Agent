@@ -1,5 +1,6 @@
 use crate::shared_kernel::PersistedSessionState;
 use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio, NewSessionRequest};
+use agent_client_protocol::schema::SessionModelState;
 use nomifun_api_types::AgentMetadata;
 use nomifun_api_types::{
     AcpBuildExtra, BrowserMcpConfig, ComputerMcpConfig, GatewayMcpConfig, OpenMcpConfig,
@@ -42,6 +43,10 @@ pub struct AcpSessionParams {
     /// retrieval protocol. `None`/empty means no bases are mounted.
     pub knowledge_context: Option<String>,
     pub session_snapshot: Option<PersistedSessionState>,
+    /// Synthetic model catalog supplied by the factory for ACP backends whose
+    /// native adapter does not advertise models, but whose runtime is driven
+    /// by NomiFun system providers (currently the Kun-backed 8位MCU Profile).
+    pub synthetic_model_state: Option<SessionModelState>,
     /// Backend data directory (`AppConfig.data_dir`). Passed through to
     /// `CliAgentProcess::spawn_for_sdk` so bun cache / tmp directories
     /// land under the operator-chosen path rather than the OS default.
@@ -105,6 +110,7 @@ pub async fn assemble_acp_params(
         preset_context,
         knowledge_context,
         session_snapshot,
+        synthetic_model_state: None,
         data_dir,
     }
 }

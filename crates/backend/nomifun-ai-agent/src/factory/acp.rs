@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agent_task::AgentInstance;
@@ -5,16 +6,17 @@ use crate::factory::AgentFactoryDeps;
 use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::factory::context::FactoryContext;
 use crate::factory::provider_config::{ResolvedProviderFields, resolve_provider_fields};
-use crate::knowledge_completer::first_enabled_model;
 use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
+use crate::shared_kernel::ModelId;
 use crate::types::BuildTaskOptions;
 use agent_client_protocol::schema::{
-    EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio,
+    EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio, ModelInfo,
+    SessionModelState,
 };
 use nomifun_api_types::{AcpBuildExtra, SessionMcpServer, SessionMcpTransport};
 use nomifun_common::{AppError, CommandSpec, EnvVar};
-use nomifun_db::{IMcpServerRepository, IProviderRepository};
 use nomifun_db::models::{McpServerRow, Provider};
+use nomifun_db::{IMcpServerRepository, IProviderRepository};
 use nomifun_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
 use nomifun_runtime::{managed_kun_runtime_dir, resolve_command_path};
 use tracing::{info, warn};
@@ -152,6 +154,12 @@ pub(super) async fn build(
             tracing::info!(?keys, "cc-switch: env vars injected");
         }
     }
+    let mut session_snapshot = deps
+        .acp_agent_service
+        .load_snapshot_state(&ctx.conversation_id)
+        .await;
+    let mut synthetic_model_state: Option<SessionModelState> = None;
+
     if meta.backend.as_deref() == Some("kun") {
         if let Some(runtime_dir) =
             append_managed_kun_runtime_env(&mut env, managed_kun_runtime_dir())
@@ -161,13 +169,32 @@ pub(super) async fn build(
                 "kun: managed runtime env injected"
             );
         }
-        match inject_default_kun_provider_env(&deps.provider_repo, &deps.encryption_key, &mut env)
-            .await?
+        let requested_model_id = session_snapshot
+            .as_ref()
+            .and_then(|s| s.current_model_id.as_ref())
+            .map(|m| m.as_str())
+            .or(config.current_model_id.as_deref());
+        match inject_kun_provider_env(
+            &deps.provider_repo,
+            &deps.encryption_key,
+            requested_model_id,
+            &mut env,
+        )
+        .await?
         {
-            Some(selection) => {
+            Some(injection) => {
+                let selected_model_id = encode_kun_provider_model_id(
+                    &injection.selection.provider_id,
+                    &injection.selection.model,
+                );
+                config.current_model_id = Some(selected_model_id.clone());
+                if let Some(snapshot) = session_snapshot.as_mut() {
+                    snapshot.current_model_id = Some(ModelId::new(selected_model_id));
+                }
+                synthetic_model_state = Some(injection.model_state);
                 info!(
-                    provider_id = %selection.provider_id,
-                    model = %selection.model,
+                    provider_id = %injection.selection.provider_id,
+                    model = %injection.selection.model,
                     "kun: system provider env injected"
                 );
             }
@@ -183,10 +210,6 @@ pub(super) async fn build(
         env,
         cwd,
     };
-    let session_snapshot = deps
-        .acp_agent_service
-        .load_snapshot_state(&ctx.conversation_id)
-        .await;
 
     // Load user-configured MCP servers from the DB so they reach
     // ACP `session/new` mcpServers payload. Without this the agent
@@ -236,22 +259,22 @@ pub(super) async fn build(
         }
     }
 
-    let params = Arc::new(
-        assemble_acp_params(
-            ctx.conversation_id.clone(),
-            WorkspaceInfo {
-                path: ctx.workspace,
-                is_custom: ctx.is_custom_workspace,
-            },
-            meta,
-            command_spec,
-            config,
-            session_mcp_servers,
-            session_snapshot,
-            deps.data_dir.clone(),
-        )
-        .await,
-    );
+    let mut params = assemble_acp_params(
+        ctx.conversation_id.clone(),
+        WorkspaceInfo {
+            path: ctx.workspace,
+            is_custom: ctx.is_custom_workspace,
+        },
+        meta,
+        command_spec,
+        config,
+        session_mcp_servers,
+        session_snapshot,
+        deps.data_dir.clone(),
+    )
+    .await;
+    params.synthetic_model_state = synthetic_model_state;
+    let params = Arc::new(params);
 
     let skill_mgr = deps.skill_manager.clone();
     let catalog_tx = deps.agent_registry.catalog_sender();
@@ -304,16 +327,38 @@ struct KunProviderSelection {
     model: String,
 }
 
-async fn inject_default_kun_provider_env(
+#[derive(Debug, Clone)]
+struct KunProviderInjection {
+    selection: KunProviderSelection,
+    model_state: SessionModelState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KunProviderModelEntry {
+    provider_id: String,
+    model: String,
+    encoded_id: String,
+    label: String,
+}
+
+const KUN_PROVIDER_MODEL_PREFIX: &str = "provider:";
+
+async fn inject_kun_provider_env(
     provider_repo: &Arc<dyn IProviderRepository>,
     encryption_key: &[u8; 32],
+    requested_model_id: Option<&str>,
     env: &mut Vec<EnvVar>,
-) -> Result<Option<KunProviderSelection>, AppError> {
+) -> Result<Option<KunProviderInjection>, AppError> {
     let providers = provider_repo
         .list()
         .await
         .map_err(|e| AppError::Internal(format!("failed to list providers for Kun Agent: {e}")))?;
-    let Some(selection) = select_default_kun_provider_model(&providers) else {
+    let Some(selection) = select_kun_provider_model(&providers, requested_model_id) else {
+        return Ok(None);
+    };
+    let selected_model_id = encode_kun_provider_model_id(&selection.provider_id, &selection.model);
+    let Some(model_state) = build_kun_provider_model_state(&providers, Some(&selected_model_id))
+    else {
         return Ok(None);
     };
     let fields = resolve_provider_fields(
@@ -324,21 +369,117 @@ async fn inject_default_kun_provider_env(
     )
     .await?;
     append_kun_provider_env(env, &selection.provider_id, &fields);
-    Ok(Some(selection))
+    Ok(Some(KunProviderInjection {
+        selection,
+        model_state,
+    }))
 }
 
+#[cfg(test)]
 fn select_default_kun_provider_model(providers: &[Provider]) -> Option<KunProviderSelection> {
+    select_kun_provider_model(providers, None)
+}
+
+fn encode_kun_provider_model_id(provider_id: &str, model: &str) -> String {
+    format!("{KUN_PROVIDER_MODEL_PREFIX}{provider_id}:{model}")
+}
+
+fn decode_kun_provider_model_id(model_id: &str) -> Option<KunProviderSelection> {
+    let raw = model_id.strip_prefix(KUN_PROVIDER_MODEL_PREFIX)?;
+    let (provider_id, model) = raw.split_once(':')?;
+    let provider_id = provider_id.trim();
+    let model = model.trim();
+    if provider_id.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some(KunProviderSelection {
+        provider_id: provider_id.to_owned(),
+        model: model.to_owned(),
+    })
+}
+
+fn select_kun_provider_model(
+    providers: &[Provider],
+    requested_model_id: Option<&str>,
+) -> Option<KunProviderSelection> {
+    let entries = kun_provider_model_entries(providers);
+    if entries.is_empty() {
+        return None;
+    }
+
+    if let Some(requested) = requested_model_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(decoded) = decode_kun_provider_model_id(requested)
+            && entries.iter().any(|entry| {
+                entry.provider_id == decoded.provider_id && entry.model == decoded.model
+            })
+        {
+            return Some(decoded);
+        }
+
+        // Legacy compatibility: older builds persisted just the model name.
+        if let Some(entry) = entries.iter().find(|entry| entry.model == requested) {
+            return Some(KunProviderSelection {
+                provider_id: entry.provider_id.clone(),
+                model: entry.model.clone(),
+            });
+        }
+    }
+
+    entries.first().map(|entry| KunProviderSelection {
+        provider_id: entry.provider_id.clone(),
+        model: entry.model.clone(),
+    })
+}
+
+fn build_kun_provider_model_state(
+    providers: &[Provider],
+    requested_model_id: Option<&str>,
+) -> Option<SessionModelState> {
+    let entries = kun_provider_model_entries(providers);
+    if entries.is_empty() {
+        return None;
+    }
+    let selection = select_kun_provider_model(providers, requested_model_id)?;
+    let current_model_id = encode_kun_provider_model_id(&selection.provider_id, &selection.model);
+    let available_models = entries
+        .into_iter()
+        .map(|entry| ModelInfo::new(entry.encoded_id, entry.label))
+        .collect();
+    Some(SessionModelState::new(current_model_id, available_models))
+}
+
+fn kun_provider_model_entries(providers: &[Provider]) -> Vec<KunProviderModelEntry> {
     providers
         .iter()
         .filter(|provider| provider.enabled)
-        .find_map(|provider| {
-            first_enabled_model(&provider.models, provider.model_enabled.as_deref()).map(
-                |model| KunProviderSelection {
-                    provider_id: provider.id.clone(),
-                    model,
-                },
-            )
+        .flat_map(|provider| {
+            enabled_kun_models(provider)
+                .into_iter()
+                .map(move |model| (provider, model))
         })
+        .map(|(provider, model)| KunProviderModelEntry {
+            provider_id: provider.id.clone(),
+            encoded_id: encode_kun_provider_model_id(&provider.id, &model),
+            label: format!("{} / {}", provider.name, model),
+            model,
+        })
+        .collect()
+}
+
+fn enabled_kun_models(provider: &Provider) -> Vec<String> {
+    let models = serde_json::from_str::<Vec<String>>(&provider.models).unwrap_or_default();
+    let enabled = provider
+        .model_enabled
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<HashMap<String, bool>>(raw).ok())
+        .unwrap_or_default();
+
+    models
+        .into_iter()
+        .map(|model| model.trim().to_owned())
+        .filter(|model| !model.is_empty())
+        .filter(|model| enabled.get(model).copied().unwrap_or(true))
+        .collect()
 }
 
 fn append_kun_provider_env(
@@ -362,7 +503,11 @@ fn append_kun_provider_env(
         push_env(env, "KUN_BASE_URL", base_url);
         push_env(env, "KUN_API_PATH", api_path);
         push_env(env, "BASE_URL", base_url);
-        push_env(env, "OPENAI_BASE_URL", &openai_sdk_base_url(base_url, api_path));
+        push_env(
+            env,
+            "OPENAI_BASE_URL",
+            &openai_sdk_base_url(base_url, api_path),
+        );
         if fields.provider == "anthropic" {
             push_env(env, "ANTHROPIC_BASE_URL", base_url);
         }
@@ -809,6 +954,62 @@ mod tests {
     }
 
     #[test]
+    fn kun_provider_model_id_round_trips_model_with_colon() {
+        let encoded = encode_kun_provider_model_id("deepseek", "deepseek:chat");
+        let decoded = decode_kun_provider_model_id(&encoded).expect("encoded provider model id");
+
+        assert_eq!(decoded.provider_id, "deepseek");
+        assert_eq!(decoded.model, "deepseek:chat");
+    }
+
+    #[test]
+    fn kun_provider_model_selects_requested_system_model() {
+        let rows = vec![
+            provider_row("openai", "openai", true, r#"["gpt-4o"]"#, None),
+            provider_row("deepseek", "openai", true, r#"["deepseek-chat"]"#, None),
+        ];
+        let requested = encode_kun_provider_model_id("deepseek", "deepseek-chat");
+
+        let selected =
+            select_kun_provider_model(&rows, Some(&requested)).expect("requested provider/model");
+
+        assert_eq!(selected.provider_id, "deepseek");
+        assert_eq!(selected.model, "deepseek-chat");
+    }
+
+    #[test]
+    fn kun_provider_model_state_exposes_enabled_system_models() {
+        let rows = vec![
+            provider_row(
+                "disabled-provider",
+                "openai",
+                false,
+                r#"["off-model"]"#,
+                None,
+            ),
+            provider_row(
+                "deepseek",
+                "openai",
+                true,
+                r#"["disabled-model","deepseek-chat"]"#,
+                Some(r#"{"disabled-model":false}"#),
+            ),
+        ];
+        let requested = encode_kun_provider_model_id("deepseek", "deepseek-chat");
+
+        let state = build_kun_provider_model_state(&rows, Some(&requested))
+            .expect("system provider models");
+
+        assert_eq!(state.current_model_id.to_string(), requested);
+        assert_eq!(state.available_models.len(), 1);
+        assert_eq!(state.available_models[0].model_id.to_string(), requested);
+        assert_eq!(
+            state.available_models[0].name,
+            "Provider deepseek / deepseek-chat"
+        );
+    }
+
+    #[test]
     fn kun_provider_env_exposes_system_provider_to_adapter_and_runtime() {
         let fields = crate::factory::provider_config::ResolvedProviderFields {
             provider: "openai".to_owned(),
@@ -897,7 +1098,9 @@ mod tests {
 
     fn assert_env(env: &[nomifun_common::EnvVar], name: &str, value: &str) {
         assert_eq!(
-            env.iter().find(|item| item.name == name).map(|item| item.value.as_str()),
+            env.iter()
+                .find(|item| item.name == name)
+                .map(|item| item.value.as_str()),
             Some(value),
             "expected {name}={value}, got {env:?}"
         );

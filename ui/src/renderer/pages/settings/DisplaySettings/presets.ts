@@ -7,55 +7,64 @@
 import type { ICssTheme } from '@/common/config/storage.ts';
 
 // Theme CSS loaded as raw strings via Vite ?raw imports
-import rhythmDarkCss from './presets/rhythm-dark.css?raw';
-import neonRainbowCss from './presets/neon-rainbow.css?raw';
-import frostedGlassCss from './presets/frosted-glass.css?raw';
-import sunsetAfterglowCss from './presets/sunset-afterglow.css?raw';
+import hkBlueCss from './presets/hk-blue.css?raw';
+import hkWhiteCss from './presets/hk-white.css?raw';
+import hkPurpleCss from './presets/hk-purple.css?raw';
+import hkBlackCss from './presets/hk-black.css?raw';
+import hkGoldCss from './presets/hk-gold.css?raw';
 
 /**
  * 系统默认主题 ID / System default theme ID
  * 无显式选择时（空 activeThemeId）回退并应用此主题；也是主题缺失时的兜底。
  * Applied when no theme is explicitly selected (empty activeThemeId); also the fallback when a theme is missing.
  */
-export const DEFAULT_THEME_ID = 'rhythm-dark';
+export const DEFAULT_THEME_ID = 'hk-blue';
 
 /**
  * 预设 CSS 主题列表 / Preset CSS themes list
  * 这些主题是内置的，用户可以直接选择使用 / These themes are built-in and can be directly used by users
  * 新增主题请遵循 presets/README.md 的主题契约 / New themes must follow the contract in presets/README.md
- * 数组顺序 = 卡片展示顺序：默认主题「律动暗黑」置首。
- * Array order = card display order: the default "Rhythm Dark" first.
+ * 数组顺序 = 卡片展示顺序：默认主题「蓝色主体」置首。
+ * Array order = card display order: the default "Blue Primary" first.
  */
 export const PRESET_THEMES: ICssTheme[] = [
   {
-    id: DEFAULT_THEME_ID,
-    name: '律动暗黑 Rhythm Dark',
+    id: 'hk-blue',
+    name: '蓝色主体',
     is_preset: true,
-    css: rhythmDarkCss,
+    css: hkBlueCss,
     created_at: Date.now(),
     updated_at: Date.now(),
   },
   {
-    id: 'neon-rainbow',
-    name: '暗夜霓虹 Neon Night',
+    id: 'hk-white',
+    name: '白色',
     is_preset: true,
-    css: neonRainbowCss,
+    css: hkWhiteCss,
     created_at: Date.now(),
     updated_at: Date.now(),
   },
   {
-    id: 'frosted-glass',
-    name: '冰晶幻境 Frosted Glass',
+    id: 'hk-purple',
+    name: '紫色',
     is_preset: true,
-    css: frostedGlassCss,
+    css: hkPurpleCss,
     created_at: Date.now(),
     updated_at: Date.now(),
   },
   {
-    id: 'sunset-afterglow',
-    name: '落日余晖 Sunset Afterglow',
+    id: 'hk-black',
+    name: '黑色',
     is_preset: true,
-    css: sunsetAfterglowCss,
+    css: hkBlackCss,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  },
+  {
+    id: 'hk-gold',
+    name: '金黄色',
+    is_preset: true,
+    css: hkGoldCss,
     created_at: Date.now(),
     updated_at: Date.now(),
   },

@@ -5,9 +5,11 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import useSWR, { type SWRConfiguration } from 'swr';
 import { useGoogleAuthModels } from './useGoogleAuthModels';
 import { hasSpecificModelCapability } from '@/renderer/utils/model/modelCapabilities';
+import { buildProviderModelList, dedupeModelNames } from '@/renderer/utils/model/providerModelDefaults';
 
 export interface ModelProviderListResult {
   providers: IProvider[];
+  isGoogleAuth: boolean;
   getAvailableModels: (provider: IProvider) => string[];
   formatModelLabel: (provider: { platform?: string } | undefined, modelName?: string) => string;
 }
@@ -30,6 +32,31 @@ export const useProvidersQuery = () => {
   return useSWR<IProvider[]>(PROVIDERS_SWR_KEY, fetchProviders, PROVIDERS_SWR_OPTIONS);
 };
 
+type DetectedProviderModels = Record<string, string[]>;
+
+const PROVIDER_MODEL_DISCOVERY_SWR_OPTIONS: SWRConfiguration<DetectedProviderModels, Error> = {
+  revalidateOnFocus: false,
+  revalidateOnReconnect: false,
+  shouldRetryOnError: false,
+};
+
+const providerRefreshFingerprint = (provider: IProvider): string => {
+  const updatedAt = (provider as IProvider & { updated_at?: number | string }).updated_at ?? '';
+  const keyMarker = provider.api_key ? `${provider.api_key.length}:${provider.api_key.slice(0, 2)}:${provider.api_key.slice(-2)}` : 'no-key';
+  return [
+    provider.id,
+    provider.platform,
+    provider.base_url,
+    provider.is_full_url ? 'full' : 'base',
+    updatedAt,
+    keyMarker,
+    (provider.models ?? []).join(','),
+  ].join(':');
+};
+
+const modelIdsFromFetchResponse = (models: Array<string | { id: string; name: string }>): string[] =>
+  dedupeModelNames(models.map((model) => (typeof model === 'string' ? model : model.id)));
+
 /**
  * Shared hook that builds the provider list (including Google Auth)
  * and exposes helpers consumed by both conversation and channel settings.
@@ -38,6 +65,43 @@ export const useModelProviderList = (): ModelProviderListResult => {
   const { isGoogleAuth } = useGoogleAuthModels();
 
   const { data: modelConfig } = useProvidersQuery();
+
+  const modelDiscoveryKey = useMemo(() => {
+    const configured = (modelConfig ?? []).filter((provider) => provider.enabled !== false);
+    if (configured.length === 0) return null;
+    return ['providers:auto-detected-models', configured.map(providerRefreshFingerprint).join('|')] as const;
+  }, [modelConfig]);
+
+  const { data: detectedModelsByProvider } = useSWR<DetectedProviderModels>(
+    modelDiscoveryKey,
+    async () => {
+      const entries = await Promise.all(
+        (modelConfig ?? []).map(async (provider): Promise<[string, string[]]> => {
+          if (provider.enabled === false || provider.is_full_url) return [provider.id, []];
+
+          const hasCredentials = provider.platform === 'bedrock' ? !!provider.bedrock_config : !!provider.api_key;
+          if (!hasCredentials) return [provider.id, []];
+
+          try {
+            const response = await ipcBridge.mode.fetchModelList.invoke({
+              platform: provider.platform,
+              base_url: provider.base_url,
+              api_key: provider.platform === 'bedrock' ? '' : provider.api_key,
+              bedrock_config: provider.bedrock_config,
+              try_fix: true,
+            });
+            return [provider.id, modelIdsFromFetchResponse(response.models ?? [])];
+          } catch (error) {
+            console.warn('[useModelProviderList] failed to auto-detect provider models', provider.id, error);
+            return [provider.id, []];
+          }
+        })
+      );
+
+      return Object.fromEntries(entries);
+    },
+    PROVIDER_MODEL_DISCOVERY_SWR_OPTIONS
+  );
 
   // Mutable cache for available-model filtering
   const available_modelsCacheRef = useRef(new Map<string, string[]>());
@@ -75,6 +139,19 @@ export const useModelProviderList = (): ModelProviderListResult => {
     let list: IProvider[] = Array.isArray(modelConfig) ? modelConfig : [];
     // 过滤掉被禁用的 provider（默认为启用）
     list = list.filter((p) => p.enabled !== false);
+    list = list.map((provider) => {
+      const detectedModels = detectedModelsByProvider?.[provider.id] ?? [];
+      if (detectedModels.length === 0) return provider;
+
+      return {
+        ...provider,
+        models: buildProviderModelList({
+          defaultModel: provider.models?.[0],
+          detectedModels,
+          existingModels: provider.models,
+        }),
+      };
+    });
 
     if (isGoogleAuth) {
       const googleProvider: IProvider = {
@@ -91,12 +168,12 @@ export const useModelProviderList = (): ModelProviderListResult => {
     }
     // 过滤掉没有可用模型的 provider
     return list.filter((p) => getAvailableModels(p).length > 0);
-  }, [getAvailableModels, isGoogleAuth, modelConfig]);
+  }, [detectedModelsByProvider, getAvailableModels, isGoogleAuth, modelConfig]);
 
   const formatModelLabel = useCallback((_provider: { platform?: string } | undefined, modelName?: string) => {
     if (!modelName) return '';
     return modelName;
   }, []);
 
-  return { providers, getAvailableModels, formatModelLabel };
+  return { providers, isGoogleAuth, getAvailableModels, formatModelLabel };
 };

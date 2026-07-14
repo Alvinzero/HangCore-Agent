@@ -9,6 +9,7 @@ import { LinkCloud } from '@icon-park/react';
 import { ipcBridge } from '@/common';
 import useModeModeList from '@renderer/hooks/agent/useModeModeList';
 import { getProviderLogo } from '@/renderer/utils/model/modelPlatforms';
+import { buildProviderModelList, modelOptionValues } from '@/renderer/utils/model/providerModelDefaults';
 
 /**
  * 供应商 Logo 组件
@@ -55,15 +56,26 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
       undefined
     );
 
+    const fetchLatestModelOptions = async () => {
+      if (isFullUrl) return modelListState.data?.models ?? [];
+      const hasUsableCredentials = isBedrock || !!(watchedApiKey ?? data?.api_key);
+      if (!hasUsableCredentials) return modelListState.data?.models ?? [];
+
+      try {
+        const latest = await modelListState.mutate();
+        return latest?.models ?? modelListState.data?.models ?? [];
+      } catch {
+        return modelListState.data?.models ?? [];
+      }
+    };
+
     useEffect(() => {
       if (data) {
         form.setFieldsValue({
           ...data,
           model:
             data.models && data.models.length > 0
-              ? data.models.length === 1
-                ? data.models[0]
-                : data.models
+              ? data.models[0]
               : undefined,
           bedrockAuthMethod: data.bedrock_config?.auth_method || 'accessKey',
           bedrockRegion: data.bedrock_config?.region || 'us-east-1',
@@ -89,12 +101,23 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
         onOk={async () => {
           try {
             const values = await form.validate();
-            const { context_limit: _contextLimit, model_context_limits: _modelContextLimits, ...formValues } = values;
-            const nextModels = Array.isArray(values.model) ? values.model : [values.model];
+            const {
+              context_limit: _contextLimit,
+              model_context_limits: _modelContextLimits,
+              model: _defaultModelField,
+              ...formValues
+            } = values;
+            const defaultModel = String(values.model ?? '').trim();
+            const detectedModels = modelOptionValues(await fetchLatestModelOptions());
+            const nextModels = buildProviderModelList({
+              defaultModel,
+              detectedModels,
+              existingModels: data?.models ?? [],
+            });
             const updatedProvider: IProvider = {
               ...data,
               ...formValues,
-              // Ensure models is always an array
+              // `models[0]` is the default model; the rest is the provider capability list.
               models: nextModels,
               context_limit: data?.context_limit,
               model_context_limits: data?.model_context_limits,
@@ -248,9 +271,9 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
               <Input placeholder='default' />
             </Form.Item>
 
-            {/* Model Selection */}
+            {/* 默认模型选择 / Default model selection */}
             <Form.Item
-              label={t('settings.modelName')}
+              label={t('common.defaultModel', { defaultValue: '默认模型' })}
               field={'model'}
               required
               rules={[{ required: true }]}
@@ -267,7 +290,6 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
                 loading={!isFullUrl && modelListState.isLoading}
                 showSearch
                 allowCreate
-                mode={data?.models && data.models.length > 1 ? 'multiple' : undefined}
                 onFocus={async () => {
                   if (isFullUrl) return;
                   // For Bedrock, build bedrock_config from current form values and fetch models

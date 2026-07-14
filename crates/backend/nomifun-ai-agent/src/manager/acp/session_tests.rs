@@ -143,6 +143,32 @@ fn apply_observed_model_syncs_advertised_current_without_losing_available() {
 }
 
 #[test]
+fn preload_persisted_model_keeps_advertised_available_models() {
+    use agent_client_protocol::schema::ModelInfo;
+    let mut session = make_session();
+    session.apply_advertised_models(SessionModelState::new(
+        "provider:deepseek:deepseek-chat",
+        vec![
+            ModelInfo::new("provider:deepseek:deepseek-chat", "DeepSeek / deepseek-chat"),
+            ModelInfo::new("provider:openai:gpt-4o", "OpenAI / gpt-4o"),
+        ],
+    ));
+    session.drain_events();
+
+    session.preload_persisted(&PersistedSessionState {
+        current_model_id: Some(ModelId::new("provider:openai:gpt-4o")),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        session.current_model_id().as_deref(),
+        Some("provider:openai:gpt-4o")
+    );
+    let models = session.model_info().expect("models present");
+    assert_eq!(models.available_models.len(), 2, "available_models must be preserved");
+}
+
+#[test]
 fn apply_observed_mode_creates_advertised_when_empty() {
     let mut session = make_session();
     session.apply_observed_mode(ModeId::new("plan"));

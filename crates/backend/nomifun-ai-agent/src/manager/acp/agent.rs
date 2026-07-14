@@ -300,7 +300,13 @@ impl AcpAgentManager {
             snapshot.map(|s| s.config_selections.clone()).unwrap_or_default(),
         );
 
-        let session = AcpSession::new(initial_mode, initial_model, initial_config);
+        let mut session = AcpSession::new(initial_mode, initial_model, initial_config);
+        if let Some(model_state) = params.synthetic_model_state.clone() {
+            session.apply_advertised_models(model_state);
+            // Factory-provided model catalogs are startup state, not a fresh
+            // CLI observation that should be echoed to persistence here.
+            session.drain_events();
+        }
 
         let pipeline = PromptPipeline::new(vec![
             // KnowledgeContextHook runs first so its block ends up closest to

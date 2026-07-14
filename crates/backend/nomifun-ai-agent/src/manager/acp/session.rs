@@ -509,7 +509,13 @@ impl AcpSession {
             self.observed.mode_id = Some(mode.clone());
         }
         if let Some(model) = &state.current_model_id {
-            self.advertised.models = Some(SessionModelState::new(model.as_str().to_owned(), Vec::new()));
+            let available = self
+                .advertised
+                .models
+                .as_ref()
+                .map(|m| m.available_models.clone())
+                .unwrap_or_default();
+            self.advertised.models = Some(SessionModelState::new(model.as_str().to_owned(), available));
             self.observed.model_id = Some(model.clone());
         }
         if !state.config_selections.is_empty() {

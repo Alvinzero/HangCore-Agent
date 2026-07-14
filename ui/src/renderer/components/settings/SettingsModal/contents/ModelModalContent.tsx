@@ -22,6 +22,7 @@ import { useContainerWidth } from '@/renderer/hooks/ui/useContainerWidth';
 import { useSettingsViewMode } from '../settingsViewContext';
 import { consumePendingDeepLink } from '@/renderer/hooks/system/useDeepLink';
 import { ContextLimitSelect, formatContextLimit } from '@/renderer/pages/settings/components/ContextLimitSelect';
+import { buildProviderUpdateRequest } from './providerUpdatePayload';
 import '../model-provider.css';
 
 /**
@@ -259,17 +260,16 @@ const ModelModalContent: React.FC = () => {
    * Create when the provider id is new, update otherwise.
    * The caller is expected to have mutated the id-bearing record already.
    */
-  const persistPlatform = async (platform: IProvider): Promise<void> => {
-    const existing = (data || []).some((item) => item.id === platform.id);
+  const persistPlatform = async (platform: IProvider, options?: { includeModels?: boolean }): Promise<void> => {
+    const existing = (data || []).find((item) => item.id === platform.id);
     if (existing) {
-      const { id, ...body } = platform;
-      await ipcBridge.mode.updateProvider.invoke({ id, ...body });
+      await ipcBridge.mode.updateProvider.invoke(buildProviderUpdateRequest(platform, existing, options));
     } else {
       await ipcBridge.mode.createProvider.invoke(platform);
     }
   };
 
-  const updatePlatform = (platform: IProvider, success: () => void) => {
+  const updatePlatform = (platform: IProvider, success: () => void, options?: { includeModels?: boolean }) => {
     const existing = (data || []).find((item) => item.id === platform.id);
     const nextArray = existing
       ? (data || []).map((item) => (item.id === platform.id ? { ...item, ...platform } : item))
@@ -278,7 +278,7 @@ const ModelModalContent: React.FC = () => {
     // Optimistic update
     void mutate(nextArray, false);
 
-    persistPlatform(platform)
+    persistPlatform(platform, options)
       .then(() => {
         void mutate();
         success();
@@ -467,13 +467,13 @@ const ModelModalContent: React.FC = () => {
       updatePlatform(platform, () => {
         setCollapseKey((prev) => ({ ...prev, [platform.id]: true }));
         addModelModalCtrl.close();
-      });
+      }, { includeModels: true });
     },
   });
 
   const [editModalCtrl, editModalContext] = EditModeModal.useModal({
     onChange(platform) {
-      updatePlatform(platform, () => editModalCtrl.close());
+      updatePlatform(platform, () => editModalCtrl.close(), { includeModels: true });
     },
   });
 
@@ -805,7 +805,8 @@ const ModelModalContent: React.FC = () => {
                                         Object.keys(newModelDescriptions).length > 0 ? newModelDescriptions : undefined,
                                       model_context_limits: newModelContextLimits,
                                     },
-                                    () => {}
+                                    () => {},
+                                    { includeModels: true }
                                   );
                                 }}
                               >

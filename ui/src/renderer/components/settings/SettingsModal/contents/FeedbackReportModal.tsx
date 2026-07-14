@@ -23,7 +23,7 @@ export const NOMIFUN_PUBLIC_LINKS = {
   emailHref: '',
 } as const;
 
-const COPYRIGHT = '© 2026 HangCore Agent';
+const COPYRIGHT = '© 2026 HK AI Platform';
 
 const CONTACT_ITEMS = [
   {

@@ -373,16 +373,56 @@ async fn pre_baseline_database_is_renamed_and_rebuilt() {
 }
 
 #[tokio::test]
-async fn pre_baseline_rebuild_refused_when_credential_present() {
+async fn pre_baseline_rebuild_preserves_system_user_credential() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nomifun-backend.db");
 
-    // Build a valid DB, seed a user with a REAL (non-empty) password, then forge
+    // Build a valid DB, seed the system user with REAL credentials, then forge
     // a pre-baseline migration mismatch.
     let db = init_database(&path).await.unwrap();
+    sqlx::query("UPDATE users SET username = 'operator', password_hash = 'bcrypt_hash', jwt_secret = 'jwt-old' WHERE id = 'system_default_user'")
+    .execute(db.pool())
+    .await
+    .unwrap();
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = X'00'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+
+    // Re-init: the version mismatch rebuilds the baseline DB, then restores the
+    // system user's durable credential fields from the backup.
+    let db = init_database(&path).await.unwrap();
+    assert!(
+        dir.path().join("nomifun-backend.db.pre-baseline.bak").exists(),
+        "old database should be preserved as .pre-baseline.bak"
+    );
+    let restored: (String, String, String) =
+        sqlx::query_as("SELECT username, password_hash, jwt_secret FROM users WHERE id = 'system_default_user'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert_eq!(restored.0, "operator");
+    assert_eq!(restored.1, "bcrypt_hash");
+    assert_eq!(restored.2, "jwt-old");
+}
+
+#[tokio::test]
+async fn pre_baseline_rebuild_preserves_provider_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nomifun-backend.db");
+
+    // Build a valid DB, seed a configured model provider, then forge a
+    // pre-baseline migration mismatch. This mirrors a no-auth desktop setup:
+    // there may be no user password, but provider API keys are still real user
+    // credentials and must not disappear during an update.
+    let db = init_database(&path).await.unwrap();
     sqlx::query(
-        "INSERT INTO users (id, username, password_hash, created_at, updated_at) \
-         VALUES ('u_real', 'real_user', 'bcrypt_hash', 1, 1)",
+        "INSERT INTO providers \
+         (id, platform, name, base_url, api_key_encrypted, models, enabled, capabilities, created_at, updated_at) \
+         VALUES ('prov_deepseek', 'openai', 'DeepSeek', 'https://api.deepseek.com/v1', \
+         'encrypted_provider_key', '[\"deepseek-chat\"]', 1, '[]', 1, 1)",
     )
     .execute(db.pool())
     .await
@@ -393,30 +433,21 @@ async fn pre_baseline_rebuild_refused_when_credential_present() {
         .unwrap();
     db.close().await;
 
-    // Re-init: the guardrail must REFUSE to rebuild (a real credential exists),
-    // returning an error and preserving the database in place.
-    let result = init_database(&path).await;
+    let db = init_database(&path).await.unwrap();
     assert!(
-        result.is_err(),
-        "init must fail fast rather than wipe a database holding a real credential"
+        dir.path().join("nomifun-backend.db.pre-baseline.bak").exists(),
+        "old database should be preserved as .pre-baseline.bak"
     );
-
-    // The original DB is preserved in place (NOT renamed aside), so the row survives.
-    assert!(path.exists(), "the real database file must be preserved in place");
-    assert!(
-        !dir.path().join("nomifun-backend.db.pre-baseline.bak").exists(),
-        "a credential-bearing DB must not be renamed to a .pre-baseline.bak"
-    );
-    // Confirm the credential row is still intact in the preserved file.
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
-        .await
-        .unwrap();
-    let survived: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE id = 'u_real'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
-    assert_eq!(survived.0, 1, "the real credential row must survive the refusal");
+    let restored: (String, String, String, i64) =
+        sqlx::query_as("SELECT name, api_key_encrypted, models, enabled FROM providers WHERE id = 'prov_deepseek'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert_eq!(restored.0, "DeepSeek");
+    assert_eq!(restored.1, "encrypted_provider_key");
+    assert_eq!(restored.2, "[\"deepseek-chat\"]");
+    assert_eq!(restored.3, 1);
 }
 
 #[tokio::test]

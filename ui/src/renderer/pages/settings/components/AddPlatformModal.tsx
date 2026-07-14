@@ -26,6 +26,7 @@ import {
 } from '@/renderer/utils/model/modelPlatforms';
 import type { DeepLinkAddProviderDetail } from '@/renderer/hooks/system/useDeepLink';
 import { ContextLimitSelect } from './ContextLimitSelect';
+import { buildProviderModelList, modelOptionValues } from '@/renderer/utils/model/providerModelDefaults';
 
 /**
  * 预设供应商的 API 地址示例（用于 base_url 旁的 tips 弹层）
@@ -384,10 +385,23 @@ const AddPlatformModal = ModalHOC<{
   const fixBaseUrl = modelListState.data?.fix_base_url;
   const showBaseUrlSuggestion = !!fixBaseUrl && fixBaseUrl !== base_url && fixBaseUrl !== dismissedFixUrl;
 
+  const fetchLatestModelOptions = async () => {
+    if (isFullUrl) return modelListState.data?.models ?? [];
+    const hasUsableCredentials = isBedrock || isGemini || !!api_key;
+    if (!hasUsableCredentials) return modelListState.data?.models ?? [];
+
+    try {
+      const latest = await modelListState.mutate();
+      return latest?.models ?? modelListState.data?.models ?? [];
+    } catch {
+      return modelListState.data?.models ?? [];
+    }
+  };
+
   const handleSubmit = () => {
     form
       .validate()
-      .then((values) => {
+      .then(async (values) => {
         // 优先使用用户填写的供应商名称，留空时回退到平台预设名称
         // Prefer the user-entered provider name; fall back to the platform preset when blank
         const presetName = selectedPlatform?.i18nKey
@@ -396,6 +410,14 @@ const AddPlatformModal = ModalHOC<{
         const name = String(values.name ?? '').trim() || presetName;
         const contextLimit =
           typeof values.context_limit === 'number' && values.context_limit > 0 ? values.context_limit : undefined;
+        const defaultModel = String(values.model ?? '').trim();
+        const detectedModels = modelOptionValues(await fetchLatestModelOptions());
+        const models = buildProviderModelList({
+          defaultModel,
+          detectedModels,
+          existingModels: defaultModel ? [defaultModel] : [],
+        });
+
         const provider: IProvider = {
           id: prefixedId('prov'),
           platform: selectedPlatform?.platform ?? 'custom',
@@ -404,9 +426,9 @@ const AddPlatformModal = ModalHOC<{
           // Prefer user input base_url, fallback to platform preset
           base_url: isBedrock ? '' : values.base_url || selectedPlatform?.base_url || '',
           api_key: isBedrock ? '' : values.api_key,
-          models: [values.model],
+          models,
           is_full_url: isFullUrl,
-          model_context_limits: contextLimit ? { [values.model]: contextLimit } : undefined,
+          model_context_limits: contextLimit ? { [defaultModel]: contextLimit } : undefined,
         };
 
         // Add Bedrock configuration if platform is Bedrock
@@ -426,8 +448,13 @@ const AddPlatformModal = ModalHOC<{
         }
 
         // new-api 平台：保存每模型协议配置 / new-api platform: save per-model protocol config
-        if (isNewApi && values.model) {
-          provider.model_protocols = { [values.model]: modelProtocol };
+        if (isNewApi && defaultModel) {
+          provider.model_protocols = Object.fromEntries(
+            models.map((modelName) => [
+              modelName,
+              modelName === defaultModel ? modelProtocol : detectNewApiProtocol(modelName),
+            ])
+          );
         }
 
         onSubmit(provider);
@@ -754,9 +781,9 @@ const AddPlatformModal = ModalHOC<{
             <Input placeholder='default' />
           </Form.Item>
 
-          {/* 模型选择 / Model Selection */}
+          {/* 默认模型选择 / Default model selection */}
           <Form.Item
-            label={t('settings.modelName')}
+            label={t('common.defaultModel', { defaultValue: '默认模型' })}
             field={'model'}
             required
             rules={[{ required: true }]}

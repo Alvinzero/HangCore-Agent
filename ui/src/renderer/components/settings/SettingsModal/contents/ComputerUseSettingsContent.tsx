@@ -61,7 +61,7 @@ const ComputerUseSettingsContent: React.FC = () => {
   }, []);
 
   const isMac = perm?.platform === 'macos';
-  const appLabel = perm?.app_label || 'HangCore Agent';
+  const appLabel = perm?.app_label || 'HK AI Platform';
 
   const permRow = (kind: ComputerPermissionKind, granted: boolean | null, label: string, description: string) => (
     <PreferenceRow label={label} description={description}>

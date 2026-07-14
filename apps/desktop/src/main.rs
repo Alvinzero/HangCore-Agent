@@ -213,8 +213,8 @@ fn acquire_keep_awake() -> Result<keepawake::KeepAwake, String> {
         .display(false) // 不持有 PreventUserIdleDisplaySleep:允许显示器空闲关闭(省电 + 护屏)
         .idle(true) // PreventUserIdleSystemSleep:系统保持唤醒;电池供电时同样生效
         .sleep(false) // PreventSystemSleep:已废弃 + 电池下被忽略,显式关闭
-        .reason("HangCore Agent keep-awake enabled")
-        .app_name("HangCore Agent")
+        .reason("HK AI Platform keep-awake enabled")
+        .app_name("HK AI Platform")
         .app_reverse_domain("com.hangshun.hangcoreagent")
         .create()
         .map_err(|e| format!("failed to acquire keep-awake assertion: {e}"))
@@ -439,7 +439,7 @@ async fn sync_companion_windows(
                 // Placeholder title for the brief pre-load frame; the companion page
                 // overwrites it with the companion's custom name once its profile loads
                 // (see setTitle in pages/companion/index.tsx). Never the lowercase engine id.
-                .title("HangCore Agent")
+                .title("HK AI Platform")
                 // Matches DEFAULT_DESK (characters/index.ts): figure + minimal chrome,
                 // no reserved bubble headroom (the page grows the window on demand).
                 // Keeping these in sync avoids a visible startup resize for built-ins.
@@ -610,7 +610,7 @@ fn main() -> std::process::ExitCode {
                     backend_err_handle
                         .dialog()
                         .message(error)
-                        .title("HangCore Agent backend failed to start")
+                        .title("HK AI Platform backend failed to start")
                         .kind(MessageDialogKind::Error)
                         .blocking_show();
                     backend_err_handle.exit(1);
@@ -642,13 +642,13 @@ fn main() -> std::process::ExitCode {
             app.manage(server);
             let win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-                    .title("HangCore Agent")
+                    .title("HK AI Platform")
                     .inner_size(1280.0, 832.0)
                     .min_inner_size(880.0, 600.0)
                     .initialization_script(&init_script);
             // macOS: Overlay makes the titlebar transparent + extends content under
             // it, but it does NOT hide the native title text. With the title still
-            // set to "HangCore Agent", AppKit draws that string next to the traffic lights,
+            // set to "HK AI Platform", AppKit draws that string next to the traffic lights,
             // overlapping the React sidebar toggle. `hidden_title(true)` maps to
             // `setTitleVisibility(Hidden)` so the OS keeps the title for menus /
             // Mission Control while leaving the titlebar visually empty.
@@ -692,7 +692,7 @@ fn main() -> std::process::ExitCode {
             // Labels are English fallbacks, adopted from the renderer's locale via
             // `set_tray_labels` once it mounts (the renderer always loads before
             // the user can close, so the first menu open is already localized).
-            let tray_show = MenuItem::with_id(app, "tray-show", "Show HangCore Agent", true, None::<&str>)?;
+            let tray_show = MenuItem::with_id(app, "tray-show", "Show HK AI Platform", true, None::<&str>)?;
             let tray_quit = MenuItem::with_id(app, "tray-quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&tray_show, &tray_quit])?;
             app.manage(TrayMenuItems {
@@ -700,7 +700,7 @@ fn main() -> std::process::ExitCode {
                 quit: tray_quit.clone(),
             });
             let mut tray_builder = TrayIconBuilder::with_id("nomi-tray")
-                .tooltip("HangCore Agent")
+                .tooltip("HK AI Platform")
                 .menu(&tray_menu)
                 // Left-click is reserved for "surface the window"; the menu is
                 // right-click only (otherwise a left-click would both pop the menu
