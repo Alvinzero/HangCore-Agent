@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.10"
+        default: "0.1.11"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HangCore Agent v0.1.10 adds the CodingTask + SpecArtifact MVP: conversation-bound task records, Spec/Plan/Tasks artifacts, selected Agent traceability, and a compact conversation sidebar panel while preserving the existing 8位MCU Profile Kun runtime loop."
+        default: "HK AI Platform v0.1.11 preserves model provider configuration across updates, lets 8位MCU Profile choose from the configured provider model list, and refreshes the product branding, icon set, and five built-in UI themes."
   push:
     tags:
       - "v*.*.*"
