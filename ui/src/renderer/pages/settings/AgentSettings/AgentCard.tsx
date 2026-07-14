@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { Avatar, Button, Switch, Typography } from '@arco-design/web-react';
-import { Delete, EditTwo, Robot } from '@icon-park/react';
+import { Delete, EditTwo, PreviewCloseOne, PreviewOpen, Robot } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import { resolveAgentLogo } from '@/renderer/utils/model/agentLogo';
 import { resolveExtensionAssetUrl } from '@/renderer/utils/platform';
@@ -48,7 +48,9 @@ type AgentCardProps =
   | {
       type: 'detected';
       agent: DetectedAgent;
+      hiddenInChat?: boolean;
       onGoToChat: () => void;
+      onToggleHidden?: (hidden: boolean) => void;
     }
   | {
       type: 'installable';
@@ -71,7 +73,7 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
   const goToChatButtonClassName = '!w-full !justify-center !rounded-10px !text-12px';
 
   if (props.type === 'detected') {
-    const { agent, onGoToChat } = props;
+    const { agent, hiddenInChat = false, onGoToChat, onToggleHidden } = props;
     const extensionAvatar = resolveExtensionAssetUrl(agent.isExtension ? agent.avatar : undefined);
     const logo =
       extensionAvatar ||
@@ -83,7 +85,9 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
       });
 
     return (
-      <div className='flex min-h-[154px] flex-col rounded-12px border border-solid border-[var(--color-border-2)] bg-[var(--color-bg-2)] p-12px transition-colors hover:border-[var(--color-border-3)]'>
+      <div
+        className={`flex min-h-[184px] flex-col rounded-12px border border-solid border-[var(--color-border-2)] bg-[var(--color-bg-2)] p-12px transition-colors hover:border-[var(--color-border-3)] ${hiddenInChat ? 'opacity-70' : ''}`}
+      >
         <div className='mb-10px flex justify-center'>
           <Avatar size={40} shape='square' style={{ flexShrink: 0, backgroundColor: 'transparent' }}>
             {logo ? <img src={logo} alt={agent.name} className='h-full w-full object-contain' /> : '🤖'}
@@ -95,13 +99,42 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
             {agent.name}
           </Typography.Text>
           <Typography.Text className='mt-4px block text-11px text-t-secondary'>
-            {t('settings.agentManagement.installed')}
+            {hiddenInChat
+              ? t('settings.agentManagement.hiddenFromChat')
+              : t('settings.agentManagement.visibleInChat')}
           </Typography.Text>
         </div>
 
-        <Button size='small' type='secondary' onClick={onGoToChat} className={goToChatButtonClassName}>
-          {t('settings.agentManagement.goToChat')}
-        </Button>
+        <div className='flex flex-col gap-6px'>
+          <Button
+            size='small'
+            type='secondary'
+            onClick={onGoToChat}
+            disabled={hiddenInChat}
+            className={goToChatButtonClassName}
+          >
+            {t('settings.agentManagement.goToChat')}
+          </Button>
+          {onToggleHidden && (
+            <Button
+              size='small'
+              type='text'
+              icon={
+                hiddenInChat ? (
+                  <PreviewOpen theme='outline' size='14' />
+                ) : (
+                  <PreviewCloseOne theme='outline' size='14' />
+                )
+              }
+              onClick={() => onToggleHidden(!hiddenInChat)}
+              className='!w-full !justify-center !rounded-10px !text-12px'
+            >
+              {hiddenInChat
+                ? t('settings.agentManagement.restoreSelection')
+                : t('settings.agentManagement.cancelSelection')}
+            </Button>
+          )}
+        </div>
       </div>
     );
   }

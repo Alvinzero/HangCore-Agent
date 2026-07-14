@@ -95,6 +95,8 @@ export interface IConfigStorageRefer {
   'upload.saveToWorkspace'?: boolean;
   // guid 页面上次选择的 agent 类型 / Last selected agent type on guid page
   'guid.lastSelectedAgent'?: string;
+  /** Agent selection keys hidden from the Guid page local-agent switcher. */
+  'guid.hiddenAgentKeys'?: string[];
   // 任务完成时显示系统通知 / Show system notification when task completes
   'system.notificationEnabled'?: boolean;
   // 定时任务完成时显示系统通知 / Show system notification when scheduled task completes

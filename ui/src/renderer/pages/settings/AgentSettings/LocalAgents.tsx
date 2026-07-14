@@ -13,7 +13,7 @@ import { useAgents } from '@/renderer/hooks/agent/useAgents';
 import { useContainerWidth } from '@/renderer/hooks/ui/useContainerWidth';
 import { Button, Typography } from '@arco-design/web-react';
 import { Home, Plus } from '@icon-park/react';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import AgentCard from './AgentCard';
@@ -23,6 +23,8 @@ import { getAgentKey } from '@/renderer/pages/guid/hooks/agentSelectionUtils';
 import { openExternalUrl } from '@/renderer/utils/platform';
 import { useNomiQuickStart } from '@/renderer/hooks/agent/useNomiQuickStart';
 import { SUPPORTED_AGENTS, type SupportedAgent } from './supportedAgents';
+import { useConfig } from '@/renderer/hooks/config/useConfig';
+import { normalizeHiddenAgentKeys, toggleHiddenAgentKey } from '@/renderer/pages/guid/hooks/agentVisibility';
 
 /**
  * 卡片网格按「内容容器实际宽度」自动定列，而非视口断点 —— 模型管理内容面板
@@ -45,6 +47,9 @@ const LocalAgents: React.FC = () => {
 
   // Single fetch for all agents; both detected and custom lists are derived from it.
   const { agents: allAgents, revalidate: mutateAgents } = useAgents();
+  const [hiddenAgentKeysValue, setHiddenAgentKeys] = useConfig('guid.hiddenAgentKeys');
+  const hiddenAgentKeys = useMemo(() => normalizeHiddenAgentKeys(hiddenAgentKeysValue), [hiddenAgentKeysValue]);
+  const hiddenAgentKeySet = useMemo(() => new Set(hiddenAgentKeys), [hiddenAgentKeys]);
 
   const detectedAgents = allAgents.filter((a) => a.agent_type !== 'remote' && a.agent_source !== 'custom');
 
@@ -148,6 +153,23 @@ const LocalAgents: React.FC = () => {
     [navigate]
   );
 
+  const isDetectedAgentHidden = useCallback(
+    (agent: AgentMetadata) => hiddenAgentKeySet.has(getAgentKey(agent)),
+    [hiddenAgentKeySet]
+  );
+
+  const handleToggleDetectedAgentHidden = useCallback(
+    async (agent: AgentMetadata, hidden: boolean) => {
+      try {
+        const agentKey = getAgentKey(agent);
+        await setHiddenAgentKeys(toggleHiddenAgentKey(hiddenAgentKeys, agentKey, hidden));
+      } catch (err) {
+        console.error('toggle detected agent visibility failed:', err);
+      }
+    },
+    [hiddenAgentKeys, setHiddenAgentKeys]
+  );
+
   return (
     <div ref={ref} className='flex flex-col gap-8px py-16px'>
       <div className='px-16px text-12px text-t-secondary'>
@@ -208,7 +230,9 @@ const LocalAgents: React.FC = () => {
           <AgentCard
             type='detected'
             agent={nomiAgent}
+            hiddenInChat={isDetectedAgentHidden(nomiAgent)}
             onGoToChat={() => goToChatWithAgent(nomiAgent)}
+            onToggleHidden={(hidden) => void handleToggleDetectedAgentHidden(nomiAgent, hidden)}
           />
         )}
         {otherDetected.map((agent) => (
@@ -216,7 +240,9 @@ const LocalAgents: React.FC = () => {
             key={agent.backend || agent.agent_type}
             type='detected'
             agent={agent}
+            hiddenInChat={isDetectedAgentHidden(agent)}
             onGoToChat={() => goToChatWithAgent(agent)}
+            onToggleHidden={(hidden) => void handleToggleDetectedAgentHidden(agent, hidden)}
           />
         ))}
       </div>

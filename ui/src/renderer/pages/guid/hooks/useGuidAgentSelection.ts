@@ -23,10 +23,12 @@ import { getAgentModes, getFullAutoMode } from '@/renderer/utils/model/agentMode
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
 import { savePreferredMode, savePreferredModelId, getAgentKey as getAgentKeyUtil } from './agentSelectionUtils';
+import { filterVisibleAgents, normalizeHiddenAgentKeys } from './agentVisibility';
 import { buildKunProviderModelInfo } from '../utils/kunProviderModelInfo';
 import { usePresetAssistantResolver } from './usePresetAssistantResolver';
 import { useAgentAvailability } from './useAgentAvailability';
 import { useCustomAgentsLoader } from './useCustomAgentsLoader';
+import { useConfig } from '@/renderer/hooks/config/useConfig';
 
 export type GuidAgentSelectionResult = {
   selectedAgentKey: string;
@@ -137,6 +139,8 @@ export const useGuidAgentSelection = ({
   });
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>();
   const [selectedMode, _setSelectedMode] = useState<string>('default');
+  const [hiddenAgentKeysValue] = useConfig('guid.hiddenAgentKeys');
+  const hiddenAgentKeys = useMemo(() => normalizeHiddenAgentKeys(hiddenAgentKeysValue), [hiddenAgentKeysValue]);
   // Track whether mode was loaded from preferences to avoid overwriting during initial load
   const selectedAgentRef = useRef<string | null>(null);
   // Guard: only run the initial restore once; user selections are never overwritten
@@ -296,8 +300,21 @@ export const useGuidAgentSelection = ({
       custom_agent_id: String(ra.id),
       avatar: ra.avatar,
     }));
-    setAvailableAgents([...normalisedDetected, ...remoteAsAvailable]);
-  }, [availableAgentsData, remoteAgentsData]);
+    const visibleDetected = filterVisibleAgents(normalisedDetected, hiddenAgentKeys);
+    setAvailableAgents([...visibleDetected, ...remoteAsAvailable]);
+  }, [availableAgentsData, remoteAgentsData, hiddenAgentKeys]);
+
+  useEffect(() => {
+    if (!availableAgents || availableAgents.length === 0) return;
+    if (selectedAgentKey.startsWith('custom:')) return;
+    if (availableAgents.some((agent) => getAgentKey(agent) === selectedAgentKey)) return;
+
+    const fallbackKey = getAgentKey(availableAgents[0]);
+    _setSelectedAgentKey(fallbackKey);
+    configService.set('guid.lastSelectedAgent', fallbackKey).catch((error) => {
+      console.error('Failed to save visible fallback agent key:', error);
+    });
+  }, [availableAgents, selectedAgentKey]);
 
   // Track whether the resetAssistant flag has been consumed so it only fires once
   // per navigation. Use locationKey (changes on every navigate()) to reset the guard,
@@ -381,7 +398,11 @@ export const useGuidAgentSelection = ({
         // No saved preference or stale key — default to first detected engine
         const firstAgent = availableAgents[0];
         if (firstAgent) {
-          _setSelectedAgentKey(getAgentKey(firstAgent));
+          const fallbackKey = getAgentKey(firstAgent);
+          _setSelectedAgentKey(fallbackKey);
+          configService.set('guid.lastSelectedAgent', fallbackKey).catch((error) => {
+            console.error('Failed to save fallback agent key:', error);
+          });
         }
       } catch (error) {
         console.error('Failed to load last selected agent:', error);
