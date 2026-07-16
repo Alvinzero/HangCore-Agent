@@ -64,6 +64,7 @@
   "noOptionsAvailable": "No options available",
   "processing": "Processing...",
   "responseSentSuccessfully": "Response sent successfully",
+  "waitingAgentAfterUserInput": "Waiting for 8-bit MCU Profile to continue. New thinking or output will stream here.",
   "confirmation": {
     "applyChange": "Apply this change?",
     "allowExecution": "Allow execution?",

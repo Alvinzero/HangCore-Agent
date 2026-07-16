@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.11"
+        default: "0.1.12"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HK AI Platform v0.1.11 preserves model provider configuration across updates, lets 8位MCU Profile choose from the configured provider model list, and refreshes the product branding, icon set, and five built-in UI themes."
+        default: "HK AI Platform v0.1.12 fixes native Kun user-input interaction stalls and keeps multi-step 8位MCU Profile conversations on the real Kun runtime loop."
   push:
     tags:
       - "v*.*.*"

@@ -28,8 +28,8 @@ export const fetchProviders = async (): Promise<IProvider[]> => {
   return (await ipcBridge.mode.listProviders.invoke()) ?? [];
 };
 
-export const useProvidersQuery = () => {
-  return useSWR<IProvider[]>(PROVIDERS_SWR_KEY, fetchProviders, PROVIDERS_SWR_OPTIONS);
+export const useProvidersQuery = (enabled = true) => {
+  return useSWR<IProvider[]>(enabled ? PROVIDERS_SWR_KEY : null, fetchProviders, PROVIDERS_SWR_OPTIONS);
 };
 
 type DetectedProviderModels = Record<string, string[]>;
@@ -61,16 +61,17 @@ const modelIdsFromFetchResponse = (models: Array<string | { id: string; name: st
  * Shared hook that builds the provider list (including Google Auth)
  * and exposes helpers consumed by both conversation and channel settings.
  */
-export const useModelProviderList = (): ModelProviderListResult => {
-  const { isGoogleAuth } = useGoogleAuthModels();
+export const useModelProviderList = ({ enabled = true }: { enabled?: boolean } = {}): ModelProviderListResult => {
+  const { isGoogleAuth } = useGoogleAuthModels({ enabled });
 
-  const { data: modelConfig } = useProvidersQuery();
+  const { data: modelConfig } = useProvidersQuery(enabled);
 
   const modelDiscoveryKey = useMemo(() => {
+    if (!enabled) return null;
     const configured = (modelConfig ?? []).filter((provider) => provider.enabled !== false);
     if (configured.length === 0) return null;
     return ['providers:auto-detected-models', configured.map(providerRefreshFingerprint).join('|')] as const;
-  }, [modelConfig]);
+  }, [enabled, modelConfig]);
 
   const { data: detectedModelsByProvider } = useSWR<DetectedProviderModels>(
     modelDiscoveryKey,
@@ -136,6 +137,7 @@ export const useModelProviderList = (): ModelProviderListResult => {
   }, []);
 
   const providers = useMemo(() => {
+    if (!enabled) return [];
     let list: IProvider[] = Array.isArray(modelConfig) ? modelConfig : [];
     // 过滤掉被禁用的 provider（默认为启用）
     list = list.filter((p) => p.enabled !== false);
@@ -168,7 +170,7 @@ export const useModelProviderList = (): ModelProviderListResult => {
     }
     // 过滤掉没有可用模型的 provider
     return list.filter((p) => getAvailableModels(p).length > 0);
-  }, [detectedModelsByProvider, getAvailableModels, isGoogleAuth, modelConfig]);
+  }, [detectedModelsByProvider, enabled, getAvailableModels, isGoogleAuth, modelConfig]);
 
   const formatModelLabel = useCallback((_provider: { platform?: string } | undefined, modelName?: string) => {
     if (!modelName) return '';

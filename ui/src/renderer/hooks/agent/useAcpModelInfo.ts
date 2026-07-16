@@ -11,9 +11,11 @@ import type { IResponseMessage } from '@/common/adapter/ipcBridge';
 import type { TChatConversation } from '@/common/config/storage';
 import type { AcpModelInfo } from '@/common/types/platform/acpTypes';
 import { savePreferredModelId } from '@/renderer/pages/guid/hooks/agentSelectionUtils';
+import { buildKunProviderModelInfo, mergeKunProviderModelInfo } from '@/renderer/pages/guid/utils/kunProviderModelInfo';
 import { DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents, type AgentMetadata } from '@/renderer/utils/model/agentTypes';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import useSWR, { mutate as mutateGlobal } from 'swr';
+import { useModelProviderList } from './useModelProviderList';
 
 type AcpModelInfoKey = readonly ['acp-model-info', number];
 type AcpModelInfoFetchResult = {
@@ -126,7 +128,20 @@ export const useAcpModelInfo = ({
     isLoading: isModelInfoLoading,
     mutate: mutateModelInfo,
   } = useSWR<AcpModelInfo | null>(enabled ? modelInfoKey : null, fetchAcpModelInfo, { revalidateOnMount: false });
-  const model_info = enabled ? (cachedModelInfo ?? null) : null;
+  const isKunBackend = backend === 'kun';
+  const { providers: kunModelProviders } = useModelProviderList({ enabled: enabled && isKunBackend });
+  const kunProviderModelInfo = useMemo(
+    () => (isKunBackend ? buildKunProviderModelInfo(kunModelProviders) : null),
+    [isKunBackend, kunModelProviders]
+  );
+  const runtimeModelInfo = enabled ? (cachedModelInfo ?? null) : null;
+  const model_info = useMemo(() => {
+    if (!enabled) return null;
+    if (isKunBackend) {
+      return mergeKunProviderModelInfo(kunProviderModelInfo, runtimeModelInfo, initialModelId);
+    }
+    return runtimeModelInfo;
+  }, [enabled, initialModelId, isKunBackend, kunProviderModelInfo, runtimeModelInfo]);
 
   useEffect(() => {
     modelInfoRef.current = model_info;
@@ -143,12 +158,16 @@ export const useAcpModelInfo = ({
 
   const { data: agentsData } = useSWR<AgentMetadata[]>(enabled ? DETECTED_AGENTS_SWR_KEY : null, fetchDetectedAgents);
   const handshakeModelInfo = useMemo<AcpModelInfo | null>(() => {
-    if (!backend || !agentsData?.length) return null;
-    const matched = agentsData.find((a) => (a.backend ?? a.agent_type) === backend);
+    if (!backend) return null;
+    const matched = agentsData?.find((a) => (a.backend ?? a.agent_type) === backend);
     const info = matched?.handshake?.available_models as AcpModelInfo | undefined;
+    if (isKunBackend) {
+      return mergeKunProviderModelInfo(kunProviderModelInfo, info ?? null, initialModelId);
+    }
+    if (!agentsData?.length) return null;
     if (!info || !Array.isArray(info.available_models) || info.available_models.length === 0) return null;
     return info;
-  }, [agentsData, backend]);
+  }, [agentsData, backend, initialModelId, isKunBackend, kunProviderModelInfo]);
 
   useEffect(() => {
     handshakeModelInfoRef.current = handshakeModelInfo;

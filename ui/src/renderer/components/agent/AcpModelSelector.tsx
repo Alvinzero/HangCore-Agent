@@ -14,6 +14,7 @@ import { Button, Dropdown, Menu, Message, Tooltip } from '@arco-design/web-react
 import { Brain, Down } from '@icon-park/react';
 import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { buildAcpModelMenuGroups } from './acpModelMenuGroups';
 import MarqueePillLabel from './MarqueePillLabel';
 
 /**
@@ -47,8 +48,16 @@ const AcpModelSelector: React.FC<{
     onSelectModelFailed: () => Message.error(t('agent.model.switchFailed')),
   });
 
+  const modelGroups = model_info
+    ? buildAcpModelMenuGroups({
+        currentModelId: model_info.current_model_id,
+        models: model_info.available_models,
+      })
+    : [];
+  const selectedMenuModel = modelGroups.flatMap((group) => group.items).find((model) => model.selected);
   const defaultModelLabel = t('common.defaultModel');
   const rawDisplayLabel =
+    selectedMenuModel?.label ||
     (model_info?.current_model_id &&
       model_info.available_models.find((m) => m.id === model_info.current_model_id)?.label) ||
     model_info?.current_model_label ||
@@ -108,17 +117,35 @@ const AcpModelSelector: React.FC<{
       {...(isMobileHeaderCompact ? { getPopupContainer: () => document.body } : {})}
       droplist={
         <Menu>
-          {model_info.available_models.map((model) => (
-            <Menu.Item
-              key={model.id}
-              className={model.id === model_info.current_model_id ? 'bg-2!' : ''}
-              onClick={() => selectModel(model.id)}
-            >
-              <div className='flex items-center gap-8px w-full'>
-                <span>{model.label || model.id}</span>
-              </div>
-            </Menu.Item>
-          ))}
+          {modelGroups.map((group) =>
+            group.title ? (
+              <Menu.ItemGroup title={group.title} key={group.key}>
+                {group.items.map((model) => (
+                  <Menu.Item
+                    key={model.id}
+                    className={model.selected ? '!bg-2' : ''}
+                    onClick={() => selectModel(model.id)}
+                  >
+                    <div className='flex items-center gap-8px w-full'>
+                      <span>{model.label}</span>
+                    </div>
+                  </Menu.Item>
+                ))}
+              </Menu.ItemGroup>
+            ) : (
+              group.items.map((model) => (
+                <Menu.Item
+                  key={model.id}
+                  className={model.selected ? '!bg-2' : ''}
+                  onClick={() => selectModel(model.id)}
+                >
+                  <div className='flex items-center gap-8px w-full'>
+                    <span>{model.label}</span>
+                  </div>
+                </Menu.Item>
+              ))
+            )
+          )}
         </Menu>
       }
     >

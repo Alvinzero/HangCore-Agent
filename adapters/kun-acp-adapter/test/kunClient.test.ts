@@ -35,7 +35,11 @@ afterEach(async () => {
   Object.defineProperty(process, 'platform', { value: originalPlatform });
 });
 
-function startFakeKun(events: unknown[], options: { keepSseOpen?: boolean } = {}) {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startFakeKun(events: unknown[], options: { keepSseOpen?: boolean; eventDelayMs?: number[] } = {}) {
   const requests: Array<{ method: string; path: string; body?: unknown; auth?: string | null }> = [];
   const server = Bun.serve({
     port: 0,
@@ -62,13 +66,17 @@ function startFakeKun(events: unknown[], options: { keepSseOpen?: boolean } = {}
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             const enc = new TextEncoder();
-            for (const event of events) {
-              const kind = typeof event === 'object' && event && 'kind' in event ? String((event as { kind: unknown }).kind) : 'message';
-              controller.enqueue(enc.encode(`id: ${(event as { seq?: number }).seq ?? 1}\n`));
-              controller.enqueue(enc.encode(`event: ${kind}\n`));
-              controller.enqueue(enc.encode(`data: ${JSON.stringify(event)}\n\n`));
-            }
-            if (!options.keepSseOpen) controller.close();
+            void (async () => {
+              for (const [index, event] of events.entries()) {
+                const eventDelay = options.eventDelayMs?.[index - 1] ?? 0;
+                if (index > 0 && eventDelay > 0) await delay(eventDelay);
+                const kind = typeof event === 'object' && event && 'kind' in event ? String((event as { kind: unknown }).kind) : 'message';
+                controller.enqueue(enc.encode(`id: ${(event as { seq?: number }).seq ?? 1}\n`));
+                controller.enqueue(enc.encode(`event: ${kind}\n`));
+                controller.enqueue(enc.encode(`data: ${JSON.stringify(event)}\n\n`));
+              }
+              if (!options.keepSseOpen) controller.close();
+            })().catch((error) => controller.error(error));
           },
         });
         return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
@@ -76,8 +84,12 @@ function startFakeKun(events: unknown[], options: { keepSseOpen?: boolean } = {}
       if (url.pathname === '/v1/approvals/approval-1' && request.method === 'POST') {
         return Response.json({ approvalId: 'approval-1', decision: body?.decision, status: body?.decision === 'allow' ? 'allowed' : 'denied' });
       }
-      if (url.pathname === '/v1/user-inputs/input-1' && request.method === 'POST') {
-        return Response.json({ inputId: 'input-1', status: body?.cancelled ? 'cancelled' : 'submitted', answers: body?.answers ?? [] });
+      if (url.pathname.startsWith('/v1/user-inputs/') && request.method === 'POST') {
+        return Response.json({
+          inputId: decodeURIComponent(url.pathname.split('/').pop() || ''),
+          status: body?.cancelled ? 'cancelled' : 'submitted',
+          answers: body?.answers ?? [],
+        });
       }
       return Response.json({ message: 'not found' }, { status: 404 });
     },
@@ -838,6 +850,329 @@ describe('KunRuntimeClient', () => {
         method: 'POST',
         path: '/v1/user-inputs/input-1',
         body: { answers: [{ id: 'branch', label: 'main', value: 'main' }] },
+      })
+    );
+  });
+
+  test('treats Kun user_input tool calls as interactive user-input requests', async () => {
+    const fake = startFakeKun([
+      {
+        kind: 'item_created',
+        seq: 1,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: {
+          kind: 'tool_call',
+          id: 'call-user-input-1',
+          summary: 'user_input',
+          arguments: {
+            question: 'Which board should Kun target?',
+            options: [
+              { label: 'HK64S8x', description: '8-bit MCU profile' },
+              { label: 'Other', description: 'Ask for a follow-up' },
+            ],
+          },
+        },
+      },
+      { kind: 'turn_completed', seq: 2, threadId: 'thread-kun-1', turnId: 'turn-kun-1' },
+    ]);
+    const updates: unknown[] = [];
+    const seenRequests: unknown[] = [];
+    const client = new KunRuntimeClient({
+      baseUrl: fake.baseUrl,
+      onSessionUpdate: async (update) => updates.push(update),
+      requestUserInput: async (request) => {
+        seenRequests.push(request);
+        return {
+          cancelled: false,
+          answers: [{ id: 'answer', label: 'HK64S8x', value: 'HK64S8x' }],
+        };
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+    const result = await client.prompt(session.sessionId, {
+      prompt: [{ type: 'text', text: 'ask me' }],
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(seenRequests).toEqual([
+      expect.objectContaining({
+        sessionId: 'thread-kun-1',
+        inputId: 'call-user-input-1',
+        questions: [
+          expect.objectContaining({
+            id: 'answer',
+            question: 'Which board should Kun target?',
+            options: [
+              { label: 'HK64S8x', description: '8-bit MCU profile' },
+              { label: 'Other', description: 'Ask for a follow-up' },
+            ],
+          }),
+        ],
+      }),
+    ]);
+    expect(fake.requests).toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/call-user-input-1',
+        body: { answers: [{ id: 'answer', label: 'HK64S8x', value: 'HK64S8x' }] },
+      })
+    );
+    expect(updates).not.toContainEqual(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          sessionUpdate: 'tool_call',
+          title: 'user_input',
+        }),
+      })
+    );
+  });
+
+  test('prefers native Kun user_input_requested ids over preceding user_input tool-call ids', async () => {
+    const fake = startFakeKun([
+      {
+        kind: 'item_created',
+        seq: 1,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: {
+          kind: 'tool_call',
+          id: 'call-user-input-1',
+          summary: 'user_input',
+          arguments: {
+            question: 'Which target chip?',
+            options: [
+              { label: 'STC89C52 / AT89S52 (8051)', description: 'Classic 8051 target' },
+              { label: 'Other', description: 'Ask for a follow-up' },
+            ],
+          },
+        },
+      },
+      {
+        kind: 'user_input_requested',
+        seq: 2,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        inputId: 'input-native-1',
+        prompt: 'Which target chip?',
+        questions: [
+          {
+            id: 'target',
+            question: 'Which target chip?',
+            options: [
+              { label: 'STC89C52 / AT89S52 (8051)', description: 'Classic 8051 target' },
+              { label: 'Other', description: 'Ask for a follow-up' },
+            ],
+          },
+        ],
+      },
+      { kind: 'turn_completed', seq: 3, threadId: 'thread-kun-1', turnId: 'turn-kun-1' },
+    ]);
+    const seenRequests: unknown[] = [];
+    const client = new KunRuntimeClient({
+      baseUrl: fake.baseUrl,
+      requestUserInput: async (request) => {
+        seenRequests.push(request);
+        return {
+          cancelled: false,
+          answers: [{ id: 'target', label: 'STC89C52 / AT89S52 (8051)', value: 'STC89C52 / AT89S52 (8051)' }],
+        };
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+    const result = await client.prompt(session.sessionId, {
+      prompt: [{ type: 'text', text: 'ask me' }],
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]).toEqual(
+      expect.objectContaining({
+        sessionId: 'thread-kun-1',
+        inputId: 'input-native-1',
+      })
+    );
+    expect(fake.requests).toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/input-native-1',
+        body: { answers: [{ id: 'target', label: 'STC89C52 / AT89S52 (8051)', value: 'STC89C52 / AT89S52 (8051)' }] },
+      })
+    );
+    expect(fake.requests).not.toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/call-user-input-1',
+      })
+    );
+  });
+
+  test('ignores completed user_input tool-call updates after the native request resolves', async () => {
+    const fake = startFakeKun([
+      {
+        kind: 'item_created',
+        seq: 1,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: {
+          kind: 'tool_call',
+          id: 'item-tool-call-1',
+          status: 'pending',
+          toolName: 'user_input',
+          arguments: {
+            question: 'Which delay mode?',
+            options: [{ label: 'Software delay', description: 'Use a loop' }],
+          },
+        },
+      },
+      {
+        kind: 'user_input_requested',
+        seq: 2,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        inputId: 'input-native-1',
+        prompt: 'Which delay mode?',
+        questions: [
+          {
+            id: 'delay',
+            question: 'Which delay mode?',
+            options: [{ label: 'Software delay', description: 'Use a loop' }],
+          },
+        ],
+      },
+      {
+        kind: 'item_updated',
+        seq: 3,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: {
+          kind: 'tool_call',
+          id: 'item-tool-call-1',
+          status: 'completed',
+          toolName: 'user_input',
+          arguments: {
+            question: 'Which delay mode?',
+            options: [{ label: 'Software delay', description: 'Use a loop' }],
+          },
+        },
+      },
+      { kind: 'turn_completed', seq: 4, threadId: 'thread-kun-1', turnId: 'turn-kun-1' },
+    ]);
+    const seenRequests: unknown[] = [];
+    const client = new KunRuntimeClient({
+      baseUrl: fake.baseUrl,
+      requestUserInput: async (request) => {
+        seenRequests.push(request);
+        return {
+          cancelled: false,
+          answers: [{ id: 'delay', label: 'Software delay', value: 'Software delay' }],
+        };
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+    const result = await client.prompt(session.sessionId, {
+      prompt: [{ type: 'text', text: 'ask me' }],
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(seenRequests).toHaveLength(1);
+    expect(fake.requests).toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/input-native-1',
+      })
+    );
+    expect(fake.requests).not.toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/item-tool-call-1',
+      })
+    );
+  });
+
+  test('does not post fallback user_input decisions after a delayed native user_input_requested event consumes them', async () => {
+    const fake = startFakeKun(
+      [
+        {
+          kind: 'item_created',
+          seq: 1,
+          threadId: 'thread-kun-1',
+          turnId: 'turn-kun-1',
+          item: {
+            kind: 'tool_call',
+            id: 'call-user-input-1',
+            summary: 'user_input',
+            arguments: {
+              question: 'Which target chip?',
+              options: [{ label: 'STC89C52 / AT89S52 (8051)', description: 'Classic 8051 target' }],
+            },
+          },
+        },
+        {
+          kind: 'user_input_requested',
+          seq: 2,
+          threadId: 'thread-kun-1',
+          turnId: 'turn-kun-1',
+          inputId: 'input-native-1',
+          prompt: 'Which target chip?',
+          questions: [
+            {
+              id: 'target',
+              question: 'Which target chip?',
+              options: [{ label: 'STC89C52 / AT89S52 (8051)', description: 'Classic 8051 target' }],
+            },
+          ],
+        },
+        { kind: 'turn_completed', seq: 3, threadId: 'thread-kun-1', turnId: 'turn-kun-1' },
+      ],
+      { eventDelayMs: [150, 0] }
+    );
+    let resolveDecision: (() => void) | undefined;
+    const seenRequests: unknown[] = [];
+    const client = new KunRuntimeClient({
+      baseUrl: fake.baseUrl,
+      requestUserInput: async (request) => {
+        seenRequests.push(request);
+        await new Promise<void>((resolve) => {
+          resolveDecision = resolve;
+        });
+        return {
+          cancelled: false,
+          answers: [{ id: 'target', label: 'STC89C52 / AT89S52 (8051)', value: 'STC89C52 / AT89S52 (8051)' }],
+        };
+      },
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+    const promptPromise = client.prompt(session.sessionId, {
+      prompt: [{ type: 'text', text: 'ask me' }],
+    });
+
+    await delay(125);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]).toEqual(
+      expect.objectContaining({
+        inputId: 'call-user-input-1',
+      })
+    );
+    await delay(80);
+    resolveDecision?.();
+    const result = await promptPromise;
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(fake.requests).toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/input-native-1',
+      })
+    );
+    expect(fake.requests).not.toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        path: '/v1/user-inputs/call-user-input-1',
       })
     );
   });

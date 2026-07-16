@@ -45,7 +45,7 @@ export class KunAcpAgent {
       case 'initialize':
         return {
           protocolVersion: typeof params.protocolVersion === 'number' ? params.protocolVersion : PROTOCOL_VERSION,
-          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.11' },
+          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.12' },
           agentCapabilities: {
             loadSession: false,
             promptCapabilities: {},
@@ -84,11 +84,17 @@ export async function startStdio(options: ConstructorParameters<typeof KunRuntim
   const writer = process.stdout;
   const agent = new KunAcpAgent(writer, options);
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const inFlight = new Set<Promise<void>>();
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    await handleLine(trimmed, agent, writer);
+    let task: Promise<void>;
+    task = handleLine(trimmed, agent, writer)
+      .catch((error) => writeError(writer, null, error))
+      .finally(() => inFlight.delete(task));
+    inFlight.add(task);
   }
+  await Promise.all(inFlight);
 }
 
 export async function handleLine(line: string, agent: KunAcpAgent, writer: RpcWriter): Promise<void> {
@@ -203,19 +209,21 @@ async function requestUserInputWithPermissionCard(
     name: option.label || `Option ${index + 1}`,
     kind: 'allow_once' as const,
   }));
-  options.push({ optionId: 'cancel', name: 'Cancel', kind: 'reject_once' as const });
+  options.push({ optionId: 'cancel', name: '取消', kind: 'reject_once' as const });
 
   const response = await peer.request('session/request_permission', {
     sessionId: request.sessionId,
     toolCall: {
       toolCallId: request.inputId,
-      title: question.header || 'Kun user input',
+      title: question.header || '用户输入',
       kind: 'execute',
       status: 'pending',
       rawInput: {
+        inputKind: 'user_input',
         description: request.prompt || question.question || 'Kun requested user input',
         prompt: request.prompt,
         question: question.question,
+        options: question.options,
       },
     },
     options,

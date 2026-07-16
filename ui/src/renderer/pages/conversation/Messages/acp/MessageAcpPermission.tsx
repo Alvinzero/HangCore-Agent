@@ -20,6 +20,27 @@ interface MessageAcpPermissionProps {
 const MessageAcpPermission: React.FC<MessageAcpPermissionProps> = React.memo(({ message }) => {
   const { options = [], tool_call } = message.content || {};
   const { t } = useTranslation();
+  const rawInput = tool_call?.raw_input as
+    | {
+        inputKind?: string;
+        input_kind?: string;
+        question?: string;
+        prompt?: string;
+        description?: string;
+        options?: Array<{ label?: string; name?: string; value?: string; description?: string } | string>;
+        command?: string;
+      }
+    | undefined;
+  const isUserInputRequest = rawInput?.inputKind === 'user_input' || rawInput?.input_kind === 'user_input';
+  const userInputQuestion = rawInput?.question || rawInput?.prompt || rawInput?.description || '';
+  const optionDescriptions = new Map<string, string>();
+  if (Array.isArray(rawInput?.options)) {
+    rawInput.options.forEach((option) => {
+      if (typeof option === 'string') return;
+      const label = option.label || option.name || option.value;
+      if (label && option.description) optionDescriptions.set(label, option.description);
+    });
+  }
 
   // 基于实际数据生成显示信息
   const getToolInfo = () => {
@@ -28,6 +49,13 @@ const MessageAcpPermission: React.FC<MessageAcpPermissionProps> = React.memo(({ 
         title: t('messages.permissionRequest'),
         description: t('messages.agentRequestingPermission'),
         icon: '🔐',
+      };
+    }
+
+    if (isUserInputRequest) {
+      return {
+        title: tool_call.title || t('messages.permissionRequest'),
+        icon: '💬',
       };
     }
 
@@ -90,7 +118,10 @@ const MessageAcpPermission: React.FC<MessageAcpPermissionProps> = React.memo(({ 
           <span className='text-2xl'>{icon}</span>
           <Text className='block'>{title}</Text>
         </div>
-        {(tool_call.raw_input?.command || tool_call.title) && (
+        {isUserInputRequest && userInputQuestion && (
+          <Text className='block text-sm text-t-primary leading-6'>{userInputQuestion}</Text>
+        )}
+        {!isUserInputRequest && (tool_call.raw_input?.command || tool_call.title) && (
           <div>
             <Text className='text-xs text-t-secondary mb-1'>{t('messages.command')}</Text>
             <code className='text-xs bg-1 p-2 rounded block text-t-primary break-all'>
@@ -106,9 +137,15 @@ const MessageAcpPermission: React.FC<MessageAcpPermissionProps> = React.memo(({ 
                 options.map((option, index) => {
                   const optionName = option?.name || `${t('messages.option')} ${index + 1}`;
                   const option_id = option?.option_id || `option_${index}`;
+                  const optionDescription = optionDescriptions.get(optionName);
                   return (
                     <div key={option_id} data-testid={`message-acp-permission-option-${option_id}`}>
-                      <Radio value={option_id}>{optionName}</Radio>
+                      <Radio value={option_id}>
+                        <span className='inline-flex flex-col gap-2px align-top'>
+                          <span>{optionName}</span>
+                          {optionDescription && <Text className='text-xs text-t-secondary'>{optionDescription}</Text>}
+                        </span>
+                      </Radio>
                     </div>
                   );
                 })
@@ -138,6 +175,12 @@ const MessageAcpPermission: React.FC<MessageAcpPermissionProps> = React.memo(({ 
             <Text className='text-sm' style={{ color: 'rgb(var(--success-6))' }}>
               ✓ {t('messages.responseSentSuccessfully')}
             </Text>
+            {isUserInputRequest && (
+              <Text className='block text-xs mt-1 text-t-secondary'>
+                <span className='inline-block animate-pulse mr-1'>•</span>
+                {t('messages.waitingAgentAfterUserInput')}
+              </Text>
+            )}
           </div>
         )}
       </div>

@@ -1,4 +1,4 @@
-use crate::manager::acp::AcpAgentManager;
+use crate::manager::acp::{AcpAgentManager, AcpSession};
 use crate::manager::acp::mode_normalize::agent_metadata_uses_meta_resume;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, SessionAssignedEventData, StartEventData,
@@ -26,6 +26,22 @@ use tracing::warn;
 /// (e.g. "Workspace not found") must not trigger a session rebuild.
 fn is_session_not_found(err: &AppError) -> bool {
     matches!(err, AppError::NotFound(msg) if msg.starts_with("Session not found"))
+}
+
+fn is_kun_backend(backend: Option<&str>) -> bool {
+    backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("kun"))
+}
+
+fn mark_resume_preludes(session: &mut AcpSession, backend: Option<&str>) {
+    // Knowledge retrieval-protocol section rides every session activation.
+    session.mark_pending_knowledge_prelude();
+    // Kun-backed profiles need refreshed interaction rules after an app update
+    // too; otherwise older restored threads keep asking selectable questions as
+    // plain assistant text because their first prompt predated the user_input
+    // contract.
+    if is_kun_backend(backend) {
+        session.mark_pending_session_new_prelude();
+    }
 }
 
 impl AcpAgentManager {
@@ -142,8 +158,7 @@ impl AcpAgentManager {
                     session.apply_advertised_config_options(config_options);
                 }
                 session.set_session_id(DomainSessionId::new(new_sid.clone()));
-                // Re-deliver the knowledge section on this resumed session.
-                session.mark_pending_knowledge_prelude();
+                mark_resume_preludes(&mut session, self.params.config.backend.as_deref());
                 self.commit_session_changes(&mut session).await;
             }
             self.emit_snapshot_events().await;
@@ -198,8 +213,7 @@ impl AcpAgentManager {
                     session.apply_advertised_config_options(config_options);
                 }
                 session.set_session_id(DomainSessionId::new(session_id.to_owned()));
-                // Re-deliver the knowledge section on this resumed session.
-                session.mark_pending_knowledge_prelude();
+                mark_resume_preludes(&mut session, self.params.config.backend.as_deref());
                 self.commit_session_changes(&mut session).await;
             }
             self.emit_snapshot_events().await;
@@ -217,8 +231,7 @@ impl AcpAgentManager {
         {
             let mut session = self.session.write().await;
             session.set_session_id(DomainSessionId::new(session_id.to_owned()));
-            // Re-deliver the knowledge section on this resumed session.
-            session.mark_pending_knowledge_prelude();
+            mark_resume_preludes(&mut session, self.params.config.backend.as_deref());
             self.commit_session_changes(&mut session).await;
         }
         self.emit_snapshot_events().await;
@@ -525,6 +538,39 @@ mod tests {
         session.apply_advertised_capabilities(caps);
         let supports_load = session.agent_capabilities().map(|c| c.load_session).unwrap_or(false);
         assert!(!supports_load);
+    }
+
+    #[test]
+    fn resume_preludes_for_kun_redeliver_preset_context_once() {
+        let mut session = make_session();
+
+        super::mark_resume_preludes(&mut session, Some("kun"));
+
+        assert!(
+            session.take_pending_knowledge_prelude(),
+            "resume should still re-deliver knowledge context"
+        );
+        assert!(
+            session.take_pending_session_new_prelude(),
+            "Kun resume must re-deliver preset context so upgraded conversations receive user_input rules"
+        );
+        assert!(!session.take_pending_session_new_prelude());
+    }
+
+    #[test]
+    fn resume_preludes_for_non_kun_do_not_redeliver_preset_context() {
+        let mut session = make_session();
+
+        super::mark_resume_preludes(&mut session, Some("claude"));
+
+        assert!(
+            session.take_pending_knowledge_prelude(),
+            "resume should still re-deliver knowledge context"
+        );
+        assert!(
+            !session.take_pending_session_new_prelude(),
+            "non-Kun resume keeps preset context new-session-only"
+        );
     }
 
     /// Simulate the aggregate-state effect of a successful warmup that

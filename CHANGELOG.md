@@ -5,6 +5,12 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
+## v0.1.12 - 2026-07-16
+
+- Fixed the ACP stdio deadlock that prevented NomiFun from delivering user-input responses while a native Kun prompt was still running.
+- Fixed completed Kun `user_input` tool-call updates being misread as new requests, which caused duplicate cards and temporary-ID 404 errors.
+- Added multi-step interaction regression coverage and kept the visible waiting state for native Kun reasoning/output.
+
 ## v0.1.10 - 2026-07-06
 
 - Added the CodingTask + SpecArtifact MVP: durable `coding_tasks` and

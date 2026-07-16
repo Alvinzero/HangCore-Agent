@@ -1622,6 +1622,7 @@ export type I18nKey =
   | 'messages.toolDetailOutput'
   | 'messages.toolGroupViewSteps'
   | 'messages.unknownMessageType'
+  | 'messages.waitingAgentAfterUserInput'
   | 'modelFailover.add'
   | 'modelFailover.desc'
   | 'modelFailover.duplicate'

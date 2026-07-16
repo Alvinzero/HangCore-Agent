@@ -196,6 +196,38 @@ async fn brand_new_first_prompt_injects_preset_context() {
     );
 }
 
+/// Kun-backed 8位MCU Profile must receive the native interaction contract on
+/// the first prompt, otherwise it can fall back to plain text clarification
+/// menus instead of Kun's selectable user_input card flow.
+#[tokio::test(flavor = "current_thread")]
+async fn brand_new_kun_first_prompt_injects_native_interaction_contract() {
+    let params = fixture_params("kun", None, true).await;
+    let skill_manager = fixture_skill_manager();
+    let runtime = fixture_runtime();
+    let mut session = AcpSession::new(None, None, HashMap::new());
+    session.mark_pending_session_new_prelude();
+
+    let pipeline = make_pipeline();
+    let mut ctx = PromptCtx {
+        session: &mut session,
+        params: &params,
+        skill_manager: &skill_manager,
+        runtime: &runtime,
+    };
+
+    let out = pipeline
+        .pre_send(&mut ctx, "帮我写一个 led 轮流亮灯的代码".into())
+        .await;
+    assert!(out.contains("[Kun output format contract]"), "{out}");
+    assert!(out.contains("[Kun native interaction contract]"), "{out}");
+    assert!(out.contains("8位MCU Profile"), "{out}");
+    assert!(out.contains("user_input"), "{out}");
+    assert!(
+        out.ends_with("帮我写一个 led 轮流亮灯的代码"),
+        "user content should stay last: {out}"
+    );
+}
+
 /// Second prompt: no prelude, no reminder — pure passthrough.
 #[tokio::test(flavor = "current_thread")]
 async fn second_prompt_is_passthrough() {

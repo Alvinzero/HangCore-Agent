@@ -110,6 +110,15 @@ type RuntimeEvent = {
   [key: string]: unknown;
 };
 
+type PendingUserInputToolCall = {
+  request: KunUserInputRequest;
+  key: string;
+  timer?: ReturnType<typeof setTimeout>;
+  decisionPromise?: Promise<KunUserInputDecision>;
+  fallbackPromise?: Promise<void>;
+  consumed?: boolean;
+};
+
 type RuntimeLaunchInput = {
   baseUrl: string;
   runtimeToken: string;
@@ -131,6 +140,7 @@ const DEFAULT_MODEL = 'deepseek-v4-flash';
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_SOURCE_STARTUP_TIMEOUT_MS = 120_000;
 const DEFAULT_STARTUP_POLL_MS = 250;
+const USER_INPUT_TOOL_CALL_FALLBACK_MS = 100;
 const KUN_SOURCE_RUNTIME_WRAPPER = fileURLToPath(new URL('../bin/kun-source-runtime.mjs', import.meta.url));
 
 export class KunRuntimeClient {
@@ -154,6 +164,8 @@ export class KunRuntimeClient {
   private readonly lastSeqByThread = new Map<string, number>();
   private readonly activeTurns = new Map<string, { turnId: string; abort: AbortController }>();
   private readonly fallbackSessions = new Set<string>();
+  private readonly submittedUserInputIds = new Set<string>();
+  private readonly pendingUserInputToolCalls = new Map<string, PendingUserInputToolCall>();
   private fallbackSessionSeq = 0;
   private runtimeStartAttempt?: Promise<void>;
   private readonly usesSourceRuntime: boolean;
@@ -306,6 +318,7 @@ export class KunRuntimeClient {
       terminal = terminalFromKunEvent(event) || terminal;
       return terminal === null;
     });
+    await this.flushPendingUserInputToolCalls(sessionId, turnId);
 
     return signal.aborted ? 'cancelled' : terminal || 'end_turn';
   }
@@ -407,6 +420,8 @@ export class KunRuntimeClient {
       await this.resolveApprovalRequest(sessionId, event);
     } else if (event.kind === 'user_input_requested') {
       await this.resolveUserInputRequest(sessionId, event);
+    } else if (isUserInputToolCallEvent(event)) {
+      this.prepareUserInputToolCallFallback(sessionId, event);
     }
   }
 
@@ -424,7 +439,71 @@ export class KunRuntimeClient {
   private async resolveUserInputRequest(sessionId: string, event: RuntimeEvent): Promise<void> {
     const request = userInputRequestFromKunEvent(sessionId, event);
     if (!request) return;
-    const decision = this.requestUserInput ? await this.requestUserInput(request) : { cancelled: true as const };
+    const pending = this.takePendingUserInputToolCall(sessionId, event);
+    const decision = pending?.decisionPromise
+      ? await pending.decisionPromise
+      : this.requestUserInput
+        ? await this.requestUserInput(request)
+        : { cancelled: true as const };
+    await this.submitUserInputDecision(request, decision);
+  }
+
+  private prepareUserInputToolCallFallback(sessionId: string, event: RuntimeEvent): void {
+    const request = userInputRequestFromKunEvent(sessionId, event);
+    if (!request || this.submittedUserInputIds.has(request.inputId)) return;
+    const key = pendingUserInputKey(sessionId, event, request);
+    if (this.pendingUserInputToolCalls.has(key)) return;
+    const pending: PendingUserInputToolCall = { key, request };
+    pending.timer = setTimeout(() => {
+      void this.runPendingUserInputFallback(key).catch(() => undefined);
+    }, USER_INPUT_TOOL_CALL_FALLBACK_MS);
+    this.pendingUserInputToolCalls.set(key, pending);
+  }
+
+  private takePendingUserInputToolCall(sessionId: string, event: RuntimeEvent): PendingUserInputToolCall | undefined {
+    const key = pendingUserInputKey(sessionId, event);
+    if (!key) return undefined;
+    const pending = this.pendingUserInputToolCalls.get(key);
+    if (!pending) return undefined;
+    pending.consumed = true;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingUserInputToolCalls.delete(key);
+    return pending;
+  }
+
+  private async flushPendingUserInputToolCalls(sessionId: string, turnId: string): Promise<void> {
+    const prefix = `${sessionId}:${turnId}`;
+    const pending = [...this.pendingUserInputToolCalls.entries()].filter(([key]) => key === prefix);
+    for (const [key, item] of pending) {
+      if (item.timer) clearTimeout(item.timer);
+      await this.runPendingUserInputFallback(key);
+    }
+  }
+
+  private async runPendingUserInputFallback(key: string): Promise<void> {
+    const pending = this.pendingUserInputToolCalls.get(key);
+    if (!pending || pending.consumed) return;
+    if (!pending.decisionPromise) {
+      pending.decisionPromise = this.requestUserInput
+        ? Promise.resolve(this.requestUserInput(pending.request))
+        : Promise.resolve({ cancelled: true as const });
+    }
+    if (!pending.fallbackPromise) {
+      pending.fallbackPromise = pending.decisionPromise
+        .then((decision) => {
+          if (pending.consumed) return;
+          return this.submitUserInputDecision(pending.request, decision);
+        })
+        .finally(() => {
+          this.pendingUserInputToolCalls.delete(key);
+        });
+    }
+    await pending.fallbackPromise;
+  }
+
+  private async submitUserInputDecision(request: KunUserInputRequest, decision: KunUserInputDecision): Promise<void> {
+    if (this.submittedUserInputIds.has(request.inputId)) return;
+    this.submittedUserInputIds.add(request.inputId);
     const body = decision.cancelled ? { cancelled: true } : { answers: decision.answers };
     await this.request(`/v1/user-inputs/${encodeURIComponent(request.inputId)}`, {
       method: 'POST',
@@ -538,19 +617,24 @@ export function mapKunEventToAcp(sessionId: string, event: RuntimeEvent): AcpSes
       if (!text) return null;
       return textUpdate(sessionId, 'agent_thought_chunk', text);
     case 'tool_call_started':
+      if (isUserInputToolCallEvent(event)) return null;
       return toolCallUpdate(sessionId, event, false);
     case 'tool_call_ready':
+      if (isUserInputToolNameFromEvent(event)) return null;
       return toolCallReadyUpdate(sessionId, event);
     case 'tool_call_finished':
+      if (isUserInputToolCallEvent(event)) return null;
       return toolCallUpdate(sessionId, event, true);
     case 'item_created':
     case 'item_updated':
       if ((event.item as { kind?: unknown } | undefined)?.kind === 'tool_call') {
+        if (isUserInputToolCallEvent(event)) return null;
         return toolCallUpdate(sessionId, event, false);
       }
       return null;
     case 'item_completed':
       if ((event.item as { kind?: unknown } | undefined)?.kind === 'tool_call') {
+        if (isUserInputToolCallEvent(event)) return null;
         return toolCallUpdate(sessionId, event, true);
       }
       return null;
@@ -595,12 +679,62 @@ function permissionRequestFromKunEvent(sessionId: string, event: RuntimeEvent): 
 function userInputRequestFromKunEvent(sessionId: string, event: RuntimeEvent): KunUserInputRequest | null {
   const inputId = stringField(event, ['inputId', 'input_id']) || stringField(event.item, ['inputId', 'input_id', 'id']);
   if (!inputId) return null;
+  const toolQuestion = userInputQuestionFromToolCallEvent(event);
   return {
     sessionId,
     inputId,
-    prompt: stringField(event, ['prompt']) || stringField(event.item, ['prompt']),
-    questions: questionsFromKunEvent(event),
+    prompt: stringField(event, ['prompt']) || stringField(event.item, ['prompt']) || toolQuestion?.question,
+    questions: toolQuestion ? [toolQuestion] : questionsFromKunEvent(event),
   };
+}
+
+function pendingUserInputKey(sessionId: string, event: RuntimeEvent, request?: KunUserInputRequest): string {
+  const turnId = stringField(event, ['turnId', 'turn_id']) || stringField(event.item, ['turnId', 'turn_id']);
+  return turnId ? `${sessionId}:${turnId}` : `${sessionId}:${request?.inputId || 'unknown'}`;
+}
+
+function userInputQuestionFromToolCallEvent(event: RuntimeEvent): NonNullable<KunUserInputRequest['questions']>[number] | null {
+  if (!isUserInputToolNameFromEvent(event)) return null;
+  const input = userInputToolRawInput(event);
+  if (!input) return null;
+  const question = stringField(input, ['question', 'prompt', 'description']);
+  const options = optionsFromQuestion(input);
+  if (!question || !options?.length) return null;
+  return {
+    header: stringField(input, ['header', 'title']),
+    id: stringField(input, ['id', 'questionId', 'question_id']) || 'answer',
+    question,
+    options,
+  };
+}
+
+function isUserInputToolCallEvent(event: RuntimeEvent): boolean {
+  if (!isUserInputToolNameFromEvent(event)) return false;
+  const status = normalizeToolName(
+    stringField(event.item, ['status']) || stringField(event, ['status'])
+  );
+  if (['completed', 'submitted', 'resolved', 'cancelled', 'canceled', 'failed', 'error'].includes(status)) {
+    return false;
+  }
+  const input = userInputToolRawInput(event);
+  return Boolean(input && stringField(input, ['question', 'prompt', 'description']));
+}
+
+function isUserInputToolNameFromEvent(event: RuntimeEvent): boolean {
+  const item = event.item || {};
+  const name =
+    stringField(item, ['summary', 'toolName', 'tool_name', 'name', 'title']) ||
+    stringField(event, ['toolName', 'tool_name', 'name', 'title', 'summary']);
+  return normalizeToolName(name) === 'user_input';
+}
+
+function normalizeToolName(name?: string): string {
+  return (name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function userInputToolRawInput(event: RuntimeEvent): Record<string, unknown> | undefined {
+  const item = event.item || {};
+  return objectField(item, ['arguments', 'args', 'rawInput', 'raw_input', 'input']) || objectField(event, ['arguments', 'args', 'rawInput', 'raw_input', 'input']);
 }
 
 function questionsFromKunEvent(event: RuntimeEvent): KunUserInputRequest['questions'] {
@@ -620,11 +754,11 @@ function optionsFromQuestion(question: Record<string, unknown>): Array<{ label?:
   const options = question.options;
   if (!Array.isArray(options)) return undefined;
   return options
-    .filter((option): option is Record<string, unknown> => Boolean(option && typeof option === 'object'))
     .map((option) => ({
-      label: stringField(option, ['label']),
-      description: stringField(option, ['description']) || '',
-    }));
+      label: typeof option === 'string' ? option : stringField(option, ['label', 'name', 'value']),
+      description: typeof option === 'string' ? '' : stringField(option, ['description']) || '',
+    }))
+    .filter((option) => option.label);
 }
 
 function permissionDecisionToKunBody(decision: AcpPermissionDecision): { decision: 'allow' | 'deny'; reason?: string } {
@@ -803,6 +937,20 @@ function stringField(source: unknown, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = obj[key];
     if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function objectField(source: unknown, keys: string[]): Record<string, unknown> | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const obj = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = obj[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = safeJson(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    }
   }
   return undefined;
 }

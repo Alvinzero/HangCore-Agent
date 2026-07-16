@@ -135,6 +135,15 @@ const buildParamSummary = (kind: string, rawInput?: Record<string, unknown>): st
   return undefined;
 };
 
+const normalizeToolName = (name?: string): string => (name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const userInputQuestion = (title?: string, rawInput?: Record<string, unknown>): string | undefined => {
+  if (normalizeToolName(title) !== 'user_input' || !rawInput) return undefined;
+  const question = rawInput.question || rawInput.prompt || rawInput.description;
+  if (typeof question !== 'string' || !question.trim()) return undefined;
+  return question;
+};
+
 type AcpToolCallUpdateCompat = IMessageAcpToolCall['content']['update'] & {
   session_update?: string;
   raw_input?: Record<string, unknown>;
@@ -155,6 +164,18 @@ export function normalizeAcpToolCall(message: IMessageAcpToolCall): NormalizedTo
   if (!update) return undefined;
 
   const rawInput = update.rawInput ?? update.raw_input;
+  const legacyUserInputQuestion = userInputQuestion(update.title, rawInput);
+  if (legacyUserInputQuestion) {
+    return {
+      key: update.tool_call_id,
+      name: '用户输入',
+      status: 'pending',
+      description: legacyUserInputQuestion,
+      input: undefined,
+      messageId: message.id,
+      conversationId: message.conversation_id,
+    };
+  }
   const input = rawInput ? formatValue(rawInput) : undefined;
 
   let output: string | undefined;
@@ -240,7 +261,8 @@ export function hasRunningToolMessages(messages: ToolMessage[]): boolean {
       return Array.isArray(m.content) && m.content.some((t) => normalizeToolGroupStatus(t.status) === 'running');
     }
     if (m.type === 'acp_tool_call') {
-      return m.content?.update && normalizeAcpStatus(m.content.update.status) === 'running';
+      const normalized = normalizeAcpToolCall(m);
+      return normalized?.status === 'running';
     }
     if (m.type === 'tool_call') {
       return normalizeToolCallStatus(m.content?.status) === 'running';

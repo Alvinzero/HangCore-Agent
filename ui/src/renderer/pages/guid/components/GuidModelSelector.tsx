@@ -8,6 +8,7 @@
 import type { IProvider, TProviderWithModel } from '@/common/config/storage';
 import { iconColors } from '@/renderer/styles/colors';
 import { getModelDisplayLabel } from '@/renderer/utils/model/agentLogo';
+import { buildAcpModelMenuGroups } from '@/renderer/components/agent/acpModelMenuGroups';
 import type { AcpModelInfo } from '../types';
 import { getAvailableModels } from '../utils/modelUtils';
 import { Button, Dropdown, Menu, Tooltip } from '@arco-design/web-react';
@@ -65,14 +66,28 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
     });
   }, [current_model?.use_model, defaultModelLabel, geminiSelectedLabel]);
 
+  const acpModelGroups = React.useMemo(
+    () =>
+      currentAcpCachedModelInfo
+        ? buildAcpModelMenuGroups({
+            currentModelId: selectedAcpModel || currentAcpCachedModelInfo.current_model_id,
+            models: currentAcpCachedModelInfo.available_models,
+          })
+        : [],
+    [currentAcpCachedModelInfo, selectedAcpModel]
+  );
+
   const acpSelectedLabel = React.useMemo(() => {
+    const selectedMenuModel = acpModelGroups.flatMap((group) => group.items).find((model) => model.selected);
     return (
+      selectedMenuModel?.label ||
       currentAcpCachedModelInfo?.available_models?.find((m) => m.id === selectedAcpModel)?.label ||
       currentAcpCachedModelInfo?.current_model_label ||
       currentAcpCachedModelInfo?.current_model_id ||
       ''
     );
   }, [
+    acpModelGroups,
     currentAcpCachedModelInfo?.available_models,
     currentAcpCachedModelInfo?.current_model_id,
     currentAcpCachedModelInfo?.current_model_label,
@@ -180,32 +195,41 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
           trigger='click'
           droplist={
             <Menu selectedKeys={selectedAcpModel ? [selectedAcpModel] : []}>
-              {currentAcpCachedModelInfo.available_models.map((model) => {
-                // 获取模型健康状态
-                const providerConfig = modelConfig?.find((p) => p.platform?.includes(''));
-                const healthStatus = providerConfig?.model_health?.[model.id]?.status || 'unknown';
-                const healthColor =
-                  healthStatus === 'healthy'
-                    ? 'bg-green-500'
-                    : healthStatus === 'unhealthy'
-                      ? 'bg-red-500'
-                      : 'bg-gray-400';
-
-                return (
-                  <Menu.Item
-                    key={model.id}
-                    className={model.id === selectedAcpModel ? '!bg-2' : ''}
-                    onClick={() => setSelectedAcpModel(model.id)}
-                  >
-                    <div className='flex items-center gap-8px w-full'>
-                      {healthStatus !== 'unknown' && (
-                        <div className={`w-6px h-6px rounded-full shrink-0 ${healthColor}`} />
-                      )}
-                      <span>{model.label}</span>
-                    </div>
-                  </Menu.Item>
-                );
-              })}
+              {[
+                ...acpModelGroups.map((group) =>
+                  group.title ? (
+                    <Menu.ItemGroup title={group.title} key={group.key}>
+                      {group.items.map((model) => (
+                        <Menu.Item
+                          key={model.id}
+                          className={model.selected ? '!bg-2' : ''}
+                          onClick={() => setSelectedAcpModel(model.id)}
+                        >
+                          <div className='flex items-center gap-8px w-full'>
+                            <span>{model.label}</span>
+                          </div>
+                        </Menu.Item>
+                      ))}
+                    </Menu.ItemGroup>
+                  ) : (
+                    group.items.map((model) => (
+                      <Menu.Item
+                        key={model.id}
+                        className={model.selected ? '!bg-2' : ''}
+                        onClick={() => setSelectedAcpModel(model.id)}
+                      >
+                        <div className='flex items-center gap-8px w-full'>
+                          <span>{model.label}</span>
+                        </div>
+                      </Menu.Item>
+                    ))
+                  )
+                ),
+                <Menu.Item key='add-model' className='text-12px text-t-secondary' onClick={() => navigate('/models?section=models')}>
+                  <Plus theme='outline' size='12' />
+                  {t('settings.addModel')}
+                </Menu.Item>,
+              ]}
             </Menu>
           }
         >

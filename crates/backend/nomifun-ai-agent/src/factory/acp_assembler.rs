@@ -1,6 +1,6 @@
 use crate::shared_kernel::PersistedSessionState;
-use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio, NewSessionRequest};
 use agent_client_protocol::schema::SessionModelState;
+use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio, NewSessionRequest};
 use nomifun_api_types::AgentMetadata;
 use nomifun_api_types::{
     AcpBuildExtra, BrowserMcpConfig, ComputerMcpConfig, GatewayMcpConfig, OpenMcpConfig,
@@ -87,10 +87,7 @@ pub async fn assemble_acp_params(
 ) -> AcpSessionParams {
     let mcp_servers = resolve_mcp_servers(&config, &conversation_id, user_mcp_servers);
     let preset_context = append_launch_nudge(
-        compose_preset_context(
-            config.preset_context.as_deref(),
-            config.backend.as_deref(),
-        ),
+        compose_preset_context(config.preset_context.as_deref(), config.backend.as_deref()),
         config.open_mcp_config.is_some(),
         config.computer_mcp_config.is_some(),
         config.browser_mcp_config.is_some(),
@@ -184,6 +181,17 @@ flowchart TD
 - For structured comparisons, use GitHub Flavored Markdown tables.
 - Keep code fences balanced and put the language name immediately after the opening fence."#;
 
+const KUN_NATIVE_INTERACTION_CONTRACT: &str = r#"[Kun native interaction contract]
+You are the user-visible `8位MCU Profile`, powered by the native Kun runtime loop and tools.
+- When the task cannot proceed without a finite choice, call the native `user_input` tool; do not write a plain text menu and wait in assistant text.
+- For 8-bit MCU/code tasks, use `user_input` before code generation when any required field is missing: target chip/platform, project or assembler/toolchain, pin mapping, LED/OLED/display interface, clock, reset/WDT policy, active level, and expected behavior.
+- Use `user_input` arguments with a concise `question` and selectable `options`; keep each option user-facing and actionable. Use free-form assistant text only when there is no finite option set.
+- After the user answers, continue the same Kun loop, inspect or edit files as needed, and produce the final code with evidence or explicit assumptions."#;
+
+fn kun_preset_contract() -> String {
+    format!("{KUN_OUTPUT_FORMAT_CONTRACT}\n\n{KUN_NATIVE_INTERACTION_CONTRACT}")
+}
+
 /// Compose first-message preset context.
 fn compose_preset_context(
     base_preset_context: Option<&str>,
@@ -195,9 +203,10 @@ fn compose_preset_context(
         .map(str::to_owned);
 
     if backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("kun")) {
+        let kun_contract = kun_preset_contract();
         return Some(match base {
-            Some(ctx) => format!("{KUN_OUTPUT_FORMAT_CONTRACT}\n\n{ctx}"),
-            None => KUN_OUTPUT_FORMAT_CONTRACT.to_owned(),
+            Some(ctx) => format!("{kun_contract}\n\n{ctx}"),
+            None => kun_contract,
         });
     }
 
@@ -522,6 +531,19 @@ mod tests {
         assert!(result.contains("```mermaid"), "{result}");
         assert!(result.contains("ASCII"), "{result}");
         assert!(result.contains("Markdown tables"), "{result}");
+    }
+
+    #[test]
+    fn compose_preset_context_kun_backend_adds_native_user_input_contract() {
+        let result = compose_preset_context(None, Some("kun")).unwrap();
+        assert!(
+            result.contains("[Kun native interaction contract]"),
+            "{result}"
+        );
+        assert!(result.contains("8位MCU Profile"), "{result}");
+        assert!(result.contains("user_input"), "{result}");
+        assert!(result.contains("target chip"), "{result}");
+        assert!(result.contains("plain text menu"), "{result}");
     }
 
     #[test]

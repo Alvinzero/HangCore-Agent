@@ -19,12 +19,12 @@ export interface GoogleAuthModelResult {
   };
 }
 
-export const useGoogleAuthModels = (): GoogleAuthModelResult => {
-  const { data: googleConfig } = useSWR('google.config', () => configService.get('google.config'));
+export const useGoogleAuthModels = ({ enabled = true }: { enabled?: boolean } = {}): GoogleAuthModelResult => {
+  const { data: googleConfig } = useSWR(enabled ? 'google.config' : null, () => configService.get('google.config'));
   const proxyKey = googleConfig?.proxy || '';
 
   // Check whether Google Auth CLI is ready.
-  const { data: isGoogleAuth } = useSWR('google.auth.status' + proxyKey, async () => {
+  const { data: isGoogleAuth } = useSWR(enabled ? 'google.auth.status' + proxyKey : null, async () => {
     const data = await ipcBridge.googleAuth.status.invoke({ proxy: googleConfig?.proxy });
     return data.success;
   });
@@ -32,7 +32,7 @@ export const useGoogleAuthModels = (): GoogleAuthModelResult => {
   const shouldCheckSubscription = Boolean(isGoogleAuth);
 
   // Only hit subscription API when authenticated.
-  const subscriptionKey = shouldCheckSubscription ? 'google.subscription.status' + proxyKey : null;
+  const subscriptionKey = enabled && shouldCheckSubscription ? 'google.subscription.status' + proxyKey : null;
   const { data: subscriptionResponse } = useSWR(subscriptionKey, () => {
     return ipcBridge.google.subscriptionStatus.invoke({ proxy: googleConfig?.proxy });
   });

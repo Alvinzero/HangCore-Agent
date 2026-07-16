@@ -403,17 +403,17 @@ fn select_kun_provider_model(
     requested_model_id: Option<&str>,
 ) -> Option<KunProviderSelection> {
     let entries = kun_provider_model_entries(providers);
-    if entries.is_empty() {
-        return None;
-    }
 
     if let Some(requested) = requested_model_id.filter(|value| !value.trim().is_empty()) {
-        if let Some(decoded) = decode_kun_provider_model_id(requested)
-            && entries.iter().any(|entry| {
+        if let Some(decoded) = decode_kun_provider_model_id(requested) {
+            let is_saved_model = entries.iter().any(|entry| {
                 entry.provider_id == decoded.provider_id && entry.model == decoded.model
-            })
-        {
-            return Some(decoded);
+            });
+            let is_detected_model =
+                requested_kun_provider_model_entry(providers, requested).is_some();
+            if is_saved_model || is_detected_model {
+                return Some(decoded);
+            }
         }
 
         // Legacy compatibility: older builds persisted just the model name.
@@ -423,6 +423,10 @@ fn select_kun_provider_model(
                 model: entry.model.clone(),
             });
         }
+    }
+
+    if entries.is_empty() {
+        return None;
     }
 
     entries.first().map(|entry| KunProviderSelection {
@@ -435,7 +439,17 @@ fn build_kun_provider_model_state(
     providers: &[Provider],
     requested_model_id: Option<&str>,
 ) -> Option<SessionModelState> {
-    let entries = kun_provider_model_entries(providers);
+    let mut entries = kun_provider_model_entries(providers);
+    if let Some(requested) = requested_model_id
+        .and_then(|model_id| requested_kun_provider_model_entry(providers, model_id))
+    {
+        let already_listed = entries
+            .iter()
+            .any(|entry| entry.encoded_id == requested.encoded_id);
+        if !already_listed {
+            entries.push(requested);
+        }
+    }
     if entries.is_empty() {
         return None;
     }
@@ -446,6 +460,25 @@ fn build_kun_provider_model_state(
         .map(|entry| ModelInfo::new(entry.encoded_id, entry.label))
         .collect();
     Some(SessionModelState::new(current_model_id, available_models))
+}
+
+fn requested_kun_provider_model_entry(
+    providers: &[Provider],
+    requested_model_id: &str,
+) -> Option<KunProviderModelEntry> {
+    let selection = decode_kun_provider_model_id(requested_model_id)?;
+    let provider = providers.iter().find(|provider| {
+        provider.enabled
+            && provider.id == selection.provider_id
+            && kun_model_enabled(provider, &selection.model)
+    })?;
+
+    Some(KunProviderModelEntry {
+        provider_id: provider.id.clone(),
+        encoded_id: encode_kun_provider_model_id(&provider.id, &selection.model),
+        label: format!("{} / {}", provider.name, selection.model),
+        model: selection.model,
+    })
 }
 
 fn kun_provider_model_entries(providers: &[Provider]) -> Vec<KunProviderModelEntry> {
@@ -466,19 +499,23 @@ fn kun_provider_model_entries(providers: &[Provider]) -> Vec<KunProviderModelEnt
         .collect()
 }
 
-fn enabled_kun_models(provider: &Provider) -> Vec<String> {
-    let models = serde_json::from_str::<Vec<String>>(&provider.models).unwrap_or_default();
-    let enabled = provider
+fn kun_model_enabled(provider: &Provider, model: &str) -> bool {
+    provider
         .model_enabled
         .as_deref()
         .and_then(|raw| serde_json::from_str::<HashMap<String, bool>>(raw).ok())
-        .unwrap_or_default();
+        .and_then(|enabled| enabled.get(model).copied())
+        .unwrap_or(true)
+}
+
+fn enabled_kun_models(provider: &Provider) -> Vec<String> {
+    let models = serde_json::from_str::<Vec<String>>(&provider.models).unwrap_or_default();
 
     models
         .into_iter()
         .map(|model| model.trim().to_owned())
         .filter(|model| !model.is_empty())
-        .filter(|model| enabled.get(model).copied().unwrap_or(true))
+        .filter(|model| kun_model_enabled(provider, model))
         .collect()
 }
 
@@ -1006,6 +1043,31 @@ mod tests {
         assert_eq!(
             state.available_models[0].name,
             "Provider deepseek / deepseek-chat"
+        );
+    }
+
+    #[test]
+    fn kun_provider_model_state_accepts_requested_detected_model_for_configured_provider() {
+        let rows = vec![provider_row(
+            "deepseek",
+            "openai",
+            true,
+            r#"["deepseek-v4-flash"]"#,
+            None,
+        )];
+        let flash = encode_kun_provider_model_id("deepseek", "deepseek-v4-flash");
+        let pro = encode_kun_provider_model_id("deepseek", "deepseek-v4-pro");
+
+        let state = build_kun_provider_model_state(&rows, Some(&pro))
+            .expect("requested detected provider model");
+
+        assert_eq!(state.current_model_id.to_string(), pro);
+        assert_eq!(state.available_models.len(), 2);
+        assert_eq!(state.available_models[0].model_id.to_string(), flash);
+        assert_eq!(state.available_models[1].model_id.to_string(), pro);
+        assert_eq!(
+            state.available_models[1].name,
+            "Provider deepseek / deepseek-v4-pro"
         );
     }
 
