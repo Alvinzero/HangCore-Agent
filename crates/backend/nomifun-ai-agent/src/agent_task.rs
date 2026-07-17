@@ -16,6 +16,7 @@ use std::sync::Arc;
 use nomifun_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs};
 use tokio::sync::broadcast;
 
+use crate::capability::delivery_contract::inject_global_agent_delivery_contract;
 use crate::manager::acp::AcpAgentManager;
 use crate::manager::nanobot::NanobotAgentManager;
 use crate::manager::nomi::NomiAgentManager;
@@ -227,8 +228,9 @@ impl AgentInstance {
         self.as_task().subscribe()
     }
 
-    /// Send a user message to the agent.
-    pub async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    /// Send a user or system message through the platform-wide delivery contract.
+    pub async fn send_message(&self, mut data: SendMessageData) -> Result<(), AgentSendError> {
+        data.content = inject_global_agent_delivery_contract(&data.content, self.workspace());
         self.as_task().send_message(data).await
     }
 
@@ -612,5 +614,123 @@ mod cc_switch_model_merge_tests {
     fn merge_returns_none_when_both_none() {
         let result = merge_model_info(None, None);
         assert!(result.is_none());
+    }
+}
+
+#[cfg(test)]
+mod global_delivery_contract_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct CapturingMockAgent {
+        workspace: String,
+        last_message: Mutex<Option<SendMessageData>>,
+        tx: broadcast::Sender<AgentStreamEvent>,
+    }
+
+    impl CapturingMockAgent {
+        fn new(workspace: &str) -> Self {
+            let (tx, _) = broadcast::channel(8);
+            Self {
+                workspace: workspace.to_owned(),
+                last_message: Mutex::new(None),
+                tx,
+            }
+        }
+
+        fn captured(&self) -> SendMessageData {
+            self.last_message.lock().unwrap().clone().unwrap()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IAgentTask for CapturingMockAgent {
+        fn agent_type(&self) -> AgentType {
+            AgentType::Nomi
+        }
+
+        fn conversation_id(&self) -> &str {
+            "contract-test"
+        }
+
+        fn workspace(&self) -> &str {
+            &self.workspace
+        }
+
+        fn status(&self) -> Option<ConversationStatus> {
+            Some(ConversationStatus::Finished)
+        }
+
+        fn last_activity_at(&self) -> TimestampMs {
+            0
+        }
+
+        fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+            self.tx.subscribe()
+        }
+
+        async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+            *self.last_message.lock().unwrap() = Some(data);
+            Ok(())
+        }
+
+        async fn cancel(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    impl IMockAgent for CapturingMockAgent {}
+
+    fn message(content: &str) -> SendMessageData {
+        SendMessageData {
+            content: content.to_owned(),
+            msg_id: "msg-contract".to_owned(),
+            files: vec!["input.txt".to_owned()],
+            inject_skills: vec![],
+            origin: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_instance_send_message_applies_global_delivery_contract() {
+        let mock = Arc::new(CapturingMockAgent::new("/tmp/hk workspace"));
+        let instance = AgentInstance::Mock(mock.clone());
+
+        instance
+            .send_message(message("生成 LED 汇编代码"))
+            .await
+            .unwrap();
+
+        let sent = mock.captured();
+        assert!(sent.content.contains("[HK AI Platform 全局交付合同]"));
+        assert!(sent.content.contains("/tmp/hk workspace"));
+        assert!(sent.content.contains("真实文件"));
+        assert!(sent.content.contains("简体中文"));
+        assert!(sent.content.contains("汇编指令"));
+        assert!(sent.content.ends_with("生成 LED 汇编代码"));
+        assert_eq!(sent.msg_id, "msg-contract");
+        assert_eq!(sent.files, vec!["input.txt"]);
+    }
+
+    #[tokio::test]
+    async fn agent_instance_send_message_does_not_duplicate_global_delivery_contract() {
+        let mock = Arc::new(CapturingMockAgent::new("/tmp/hk"));
+        let instance = AgentInstance::Mock(mock.clone());
+        let content = "[HK AI Platform 全局交付合同]\n已注入\n[/HK AI Platform 全局交付合同]\n\n继续";
+
+        instance.send_message(message(content)).await.unwrap();
+
+        assert_eq!(
+            mock
+                .captured()
+                .content
+                .matches("[HK AI Platform 全局交付合同]")
+                .count(),
+            1
+        );
     }
 }
