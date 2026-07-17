@@ -10,9 +10,10 @@ import type { IDirOrFile } from '@/common/adapter/ipcBridge';
 import { addEventListener, emitter } from '@/renderer/utils/emitter';
 import type { FileOrFolderItem } from '@/renderer/utils/file/fileTypes';
 import { useAbortUploadsOnConversationChange } from '@/renderer/hooks/file/useAbortUploadsOnConversationChange';
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import WorkspaceRailBody from './WorkspaceRailBody';
 import type { SelectedFile, WorkspaceProps, WorkspaceSource } from './types';
+import { createWorkspaceRefreshController, getWorkspaceRefreshDecision } from './workspaceRefresh';
 
 /**
  * Map a source-agnostic {@link SelectedFile} back to the conversation SendBox
@@ -26,9 +27,6 @@ const toFileOrFolderItem = (item: SelectedFile, keepEmptyRelativePath: boolean):
   isFile: item.isFile,
   relativePath: keepEmptyRelativePath ? item.relativePath : item.relativePath || undefined,
 });
-
-/** Agent tool calls that touch the team layer, not the filesystem. */
-const isNonFileSystemTool = (name: string) => /^mcp__nomifun-team-|^team_/.test(name);
 
 /**
  * ChatWorkspace — 会话工作区右栏（会话源绑定）
@@ -97,61 +95,23 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
   );
 
   // --- External refresh: agent-stream writes (throttled) + manual refresh ----
-  // Throttle state lives across the subscription lifetime, so it is owned here
-  // (the source), not in the body. Mirrors the former useWorkspaceEvents logic.
-  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef(false);
-
   const subscribeRefresh = useCallback(
     (cb: () => void) => {
-      const throttledRefresh = () => {
-        if (throttleTimerRef.current) {
-          pendingRef.current = true; // Mark pending so trailing refresh fires after window
-          return;
-        }
-        cb();
-        throttleTimerRef.current = setTimeout(() => {
-          throttleTimerRef.current = null;
-          if (pendingRef.current) {
-            pendingRef.current = false;
-            cb(); // Fire trailing refresh for any calls missed during throttle window
-          }
-        }, 2000);
-      };
+      const controller = createWorkspaceRefreshController(cb);
 
       const handleResponse = (data: { type: string; data?: unknown; conversation_id?: number }) => {
-        if (data.conversation_id && data.conversation_id !== conversation_id) return;
-
-        if (data.type === 'acp_tool_call') {
-          const acpData = data.data as { update?: { kind?: string; status?: string; title?: string } } | undefined;
-          const kind = acpData?.update?.kind;
-          const status = acpData?.update?.status;
-          const title = acpData?.update?.title;
-          const shouldRefresh = kind === 'edit' || kind === 'execute' || (status === 'completed' && kind !== 'read');
-          if (shouldRefresh) {
-            if (title && isNonFileSystemTool(title)) return;
-            throttledRefresh();
-          }
-        }
-        if (data.type === 'tool_call') {
-          const toolData = data.data as { status?: string; name?: string } | undefined;
-          if (toolData?.status === 'completed') {
-            if (toolData.name && isNonFileSystemTool(toolData.name)) return;
-            throttledRefresh();
-          }
-        }
+        const decision = getWorkspaceRefreshDecision(data, conversation_id);
+        if (decision === 'throttled') controller.request();
+        if (decision === 'final') controller.finalize();
       };
 
       const unsubscribeStream = ipcBridge.acpConversation.responseStream.on(handleResponse);
-      const unsubscribeManual = addEventListener(`${eventPrefix}.workspace.refresh`, () => cb());
+      const unsubscribeManual = addEventListener(`${eventPrefix}.workspace.refresh`, () => controller.finalize());
 
       return () => {
         unsubscribeStream();
         unsubscribeManual();
-        if (throttleTimerRef.current) {
-          clearTimeout(throttleTimerRef.current);
-          throttleTimerRef.current = null;
-        }
+        controller.dispose();
       };
     },
     [conversation_id, eventPrefix]
