@@ -142,6 +142,13 @@ const DEFAULT_SOURCE_STARTUP_TIMEOUT_MS = 120_000;
 const DEFAULT_STARTUP_POLL_MS = 250;
 const USER_INPUT_TOOL_CALL_FALLBACK_MS = 100;
 const KUN_SOURCE_RUNTIME_WRAPPER = fileURLToPath(new URL('../bin/kun-source-runtime.mjs', import.meta.url));
+const KUN_PROFILE_SYSTEM_PROMPT = `你是 HK AI Platform 中的“8位MCU Profile”，由原生 Kun runtime loop 和工具系统驱动。
+- 所有用户可见的自然语言必须直接使用简体中文，尤其是思考流、推理摘要、进度说明、工具摘要和最终回答；禁止先输出英文再翻译。
+- 所有用户可见的思考流必须直接使用简体中文。需要展示推理时，只展示简洁、可核验的中文分析进度，不输出英文草稿。
+- 生成代码时，代码注释和配套说明使用简体中文；编程语言关键字、汇编指令、寄存器、API、库名、命令、路径、芯片型号和必要标识符保持原样。
+- 需要用户在有限选项中确认参数时，必须调用原生 user_input 工具；用户提交选项后继续同一个 Kun loop。
+- 用户要求生成或修改代码、配置、文档或资料时，必须把最终交付物写入当前工作区中的真实文件，并在最终回答中列出路径。`;
+const KUN_CHINESE_REASONING_FALLBACK = '正在分析任务需求、硬件约束和实现步骤……\n';
 
 export class KunRuntimeClient {
   private readonly baseUrl: string;
@@ -166,6 +173,7 @@ export class KunRuntimeClient {
   private readonly fallbackSessions = new Set<string>();
   private readonly submittedUserInputIds = new Set<string>();
   private readonly pendingUserInputToolCalls = new Map<string, PendingUserInputToolCall>();
+  private readonly reasoningFallbackTurns = new Set<string>();
   private fallbackSessionSeq = 0;
   private runtimeStartAttempt?: Promise<void>;
   private readonly usesSourceRuntime: boolean;
@@ -225,6 +233,7 @@ export class KunRuntimeClient {
       workspace,
       model: this.model,
       mode: 'agent',
+      systemPrompt: KUN_PROFILE_SYSTEM_PROMPT,
     };
     if (this.approvalPolicy) body.approvalPolicy = this.approvalPolicy;
     if (this.sandboxMode) body.sandboxMode = this.sandboxMode;
@@ -266,6 +275,7 @@ export class KunRuntimeClient {
       return { stopReason };
     } finally {
       this.activeTurns.delete(sessionId);
+      this.reasoningFallbackTurns.delete(`${sessionId}:${turnId}`);
     }
   }
 
@@ -312,7 +322,7 @@ export class KunRuntimeClient {
       const event = safeJson(data) as RuntimeEvent | null;
       if (!event || (event.turnId && event.turnId !== turnId)) return true;
       if (typeof event.seq === 'number') this.lastSeqByThread.set(sessionId, event.seq);
-      const update = mapKunEventToAcp(sessionId, event);
+      const update = this.mapUserVisibleEvent(sessionId, turnId, event);
       if (update) await this.onSessionUpdate?.(update);
       await this.resolveInteractiveEvent(sessionId, event);
       terminal = terminalFromKunEvent(event) || terminal;
@@ -321,6 +331,23 @@ export class KunRuntimeClient {
     await this.flushPendingUserInputToolCalls(sessionId, turnId);
 
     return signal.aborted ? 'cancelled' : terminal || 'end_turn';
+  }
+
+  private mapUserVisibleEvent(sessionId: string, turnId: string, event: RuntimeEvent): AcpSessionUpdate | null {
+    if (event.kind !== 'assistant_reasoning_delta') {
+      return mapKunEventToAcp(sessionId, event);
+    }
+
+    const text = stringField(event.item, ['text']) || stringField(event, ['text', 'message', 'displayText']);
+    if (!text) return null;
+    if (isPredominantlyChinese(text) || isTechnicalIdentifierText(text)) {
+      return textUpdate(sessionId, 'agent_thought_chunk', text);
+    }
+
+    const key = `${sessionId}:${turnId}`;
+    if (this.reasoningFallbackTurns.has(key)) return null;
+    this.reasoningFallbackTurns.add(key);
+    return textUpdate(sessionId, 'agent_thought_chunk', KUN_CHINESE_REASONING_FALLBACK);
   }
 
   private async request<T = unknown>(
@@ -730,6 +757,17 @@ function isUserInputToolNameFromEvent(event: RuntimeEvent): boolean {
 
 function normalizeToolName(name?: string): string {
   return (name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function isPredominantlyChinese(text: string): boolean {
+  const chineseChars = text.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  const latinChars = text.match(/[A-Za-z]/g)?.length ?? 0;
+  return chineseChars > 0 && chineseChars * 2 >= latinChars;
+}
+
+function isTechnicalIdentifierText(text: string): boolean {
+  const value = text.trim();
+  return value.length > 0 && /^[A-Z0-9_./:+#*()[\], -]+$/.test(value);
 }
 
 function userInputToolRawInput(event: RuntimeEvent): Record<string, unknown> | undefined {

@@ -521,7 +521,7 @@ describe('KunRuntimeClient', () => {
         seq: 1,
         threadId: 'thread-kun-1',
         turnId: 'turn-kun-1',
-        item: { text: 'thinking with Kun loop' },
+        item: { text: '正在通过 Kun loop 分析任务。' },
       },
       {
         kind: 'assistant_text_delta',
@@ -560,6 +560,7 @@ describe('KunRuntimeClient', () => {
         body: expect.objectContaining({
           workspace: '/tmp/project',
           model: 'deepseek-v4-flash',
+          systemPrompt: expect.stringContaining('所有用户可见的思考流必须直接使用简体中文'),
         }),
       })
     );
@@ -575,7 +576,7 @@ describe('KunRuntimeClient', () => {
         sessionId: 'thread-kun-1',
         update: {
           sessionUpdate: 'agent_thought_chunk',
-          content: { type: 'text', text: 'thinking with Kun loop' },
+          content: { type: 'text', text: '正在通过 Kun loop 分析任务。' },
         },
       })
     );
@@ -588,6 +589,57 @@ describe('KunRuntimeClient', () => {
         },
       })
     );
+  });
+
+  test('never forwards pure-English Kun reasoning into the user-visible thought stream', async () => {
+    const fake = startFakeKun([
+      {
+        kind: 'assistant_reasoning_delta',
+        seq: 1,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: { text: 'Now I have all the info and will generate the code.' },
+      },
+      {
+        kind: 'assistant_reasoning_delta',
+        seq: 2,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: { text: 'I will now generate 目标芯片 code using the selected platform.' },
+      },
+      {
+        kind: 'assistant_reasoning_delta',
+        seq: 3,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+        item: { text: '正在确认目标芯片、引脚映射和时序约束。' },
+      },
+      {
+        kind: 'turn_completed',
+        seq: 4,
+        threadId: 'thread-kun-1',
+        turnId: 'turn-kun-1',
+      },
+    ]);
+    const updates: unknown[] = [];
+    const client = new KunRuntimeClient({
+      baseUrl: fake.baseUrl,
+      onSessionUpdate: async (update) => updates.push(update),
+    });
+
+    const session = await client.createSession({ cwd: '/tmp/project' });
+    await client.prompt(session.sessionId, {
+      prompt: [{ type: 'text', text: '生成 LED 流水灯代码' }],
+    });
+
+    const visibleThought = updates
+      .filter((update: any) => update.update?.sessionUpdate === 'agent_thought_chunk')
+      .map((update: any) => update.update.content?.text || '')
+      .join('');
+    expect(visibleThought).not.toContain('Now I have all the info');
+    expect(visibleThought).not.toContain('I will now generate');
+    expect(visibleThought).toContain('正在分析任务需求、硬件约束和实现步骤');
+    expect(visibleThought).toContain('正在确认目标芯片、引脚映射和时序约束');
   });
 
   test('finishes a prompt after Kun emits a terminal event on a long-lived SSE stream', async () => {
