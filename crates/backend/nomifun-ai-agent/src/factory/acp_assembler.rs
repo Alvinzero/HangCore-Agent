@@ -170,6 +170,12 @@ fn resolve_mcp_servers(
     servers
 }
 
+const KUN_CHINESE_VISIBILITY_CONTRACT: &str = r#"[Kun 中文可见输出合同]
+- 所有用户可见的自然语言必须使用简体中文，包括公开展示的思考流、推理摘要、进度说明、工具摘要、参数解释和最终回答；从开始思考时就直接使用中文，不要先生成英文再翻译。
+- 生成代码时，代码注释和配套说明必须使用简体中文。
+- 编程语言关键字、汇编指令、寄存器名、API 名、库名、命令、路径和必要标识符必须保持原样，不得翻译或改写。
+- 不得为了显示中文而破坏代码的可编译性、可执行性或 MCU 指令语义。"#;
+
 const KUN_OUTPUT_FORMAT_CONTRACT: &str = r#"[Kun output format contract]
 Answer in standard Markdown that the NomiFun conversation renderer can display directly.
 - For architecture, flow, sequence, state, ER, or dependency diagrams, prefer a fenced Mermaid block:
@@ -189,7 +195,9 @@ You are the user-visible `8位MCU Profile`, powered by the native Kun runtime lo
 - After the user answers, continue the same Kun loop, inspect or edit files as needed, and produce the final code with evidence or explicit assumptions."#;
 
 fn kun_preset_contract() -> String {
-    format!("{KUN_OUTPUT_FORMAT_CONTRACT}\n\n{KUN_NATIVE_INTERACTION_CONTRACT}")
+    format!(
+        "{KUN_CHINESE_VISIBILITY_CONTRACT}\n\n{KUN_OUTPUT_FORMAT_CONTRACT}\n\n{KUN_NATIVE_INTERACTION_CONTRACT}"
+    )
 }
 
 /// Compose first-message preset context.
@@ -531,6 +539,16 @@ mod tests {
         assert!(result.contains("```mermaid"), "{result}");
         assert!(result.contains("ASCII"), "{result}");
         assert!(result.contains("Markdown tables"), "{result}");
+    }
+
+    #[test]
+    fn compose_preset_context_kun_backend_adds_chinese_visibility_contract() {
+        let result = compose_preset_context(None, Some("kun")).unwrap();
+        assert!(result.contains("[Kun 中文可见输出合同]"), "{result}");
+        assert!(result.contains("简体中文"), "{result}");
+        assert!(result.contains("代码注释"), "{result}");
+        assert!(result.contains("汇编指令"), "{result}");
+        assert!(result.contains("不得翻译"), "{result}");
     }
 
     #[test]

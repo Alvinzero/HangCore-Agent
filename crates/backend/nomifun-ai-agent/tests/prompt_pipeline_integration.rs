@@ -220,6 +220,8 @@ async fn brand_new_kun_first_prompt_injects_native_interaction_contract() {
         .await;
     assert!(out.contains("[Kun output format contract]"), "{out}");
     assert!(out.contains("[Kun native interaction contract]"), "{out}");
+    assert!(out.contains("[Kun 中文可见输出合同]"), "{out}");
+    assert!(out.contains("所有用户可见的自然语言"), "{out}");
     assert!(out.contains("8位MCU Profile"), "{out}");
     assert!(out.contains("user_input"), "{out}");
     assert!(
