@@ -36,9 +36,8 @@ describe('capability hub navigation', () => {
     expect(siderSource.includes("navTo('/open-capabilities')")).toBe(true);
     expect(siderSource.includes("pathname.startsWith('/open-capabilities')")).toBe(true);
     expect(siderSource.includes("pathname.startsWith('/open-capabilities') || pathname.startsWith('/mcp')")).toBe(false);
-
-    expect(siderSource.includes('SiderExtensionsEntry')).toBe(false);
-    expect(siderSource.includes('SiderAssistantsEntry')).toBe(false);
+    expect(siderSource.includes('SiderNomiEntry')).toBe(false);
+    expect(siderSource.includes("navTo('/nomi')")).toBe(false);
   });
 
   test('routes Open Capabilities and preserves MCP legacy destinations', () => {

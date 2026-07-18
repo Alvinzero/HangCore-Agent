@@ -17,7 +17,6 @@ import {
   SiderConversationEntry,
   SiderMcpEntry,
   SiderModelHubEntry,
-  SiderNomiEntry,
   SiderOpenCapabilitiesEntry,
   SiderRequirementsEntry,
   SiderScheduledEntry,
@@ -39,7 +38,7 @@ interface SiderProps {
  * list, the create switches, and full-text search were lifted out into the
  * content-area secondary sidebar (`ConversationShell` / `ContentSider`),
  * reached via the "会话" entry. The rail holds top-level destinations grouped
- * by small-text section headers (`SiderSectionHeader`): 常用 (会话 / 桌面伙伴),
+ * by small-text section headers (`SiderSectionHeader`): 常用 (会话),
  * 自动化 (定时任务 / 需求平台), 增强工具 (助手&Skill / MCP),
  * and a bottom-pinned 设置 group
  * (模型&Agent + the footer).
@@ -82,7 +81,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
   const handleConversationClick = () => navTo('/guid');
   const handleScheduledClick = () => navTo('/scheduled');
   const handleRequirementsClick = () => navTo('/requirements');
-  const handleNomiClick = () => navTo('/nomi');
   const handleAssistantSkillsClick = () => navTo('/assistants?tab=assistants');
   const handleMcpClick = () => navTo('/mcp');
   const handleOpenCapabilitiesClick = () => navTo('/open-capabilities');
@@ -165,14 +163,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
               collapsed={collapsed}
               siderTooltipProps={siderTooltipProps}
               onClick={handleConversationClick}
-            />
-            {/* Work partner (桌面伙伴) */}
-            <SiderNomiEntry
-              isMobile={isMobile}
-              isActive={pathname.startsWith('/nomi')}
-              collapsed={collapsed}
-              siderTooltipProps={siderTooltipProps}
-              onClick={handleNomiClick}
             />
             {/* 自动化 — automation platforms */}
             <SiderSectionHeader label={t('common.siderSection.automation')} collapsed={collapsed} />

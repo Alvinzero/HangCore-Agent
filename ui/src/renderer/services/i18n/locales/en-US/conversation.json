@@ -28,28 +28,6 @@
     "expandCanvas": "Expand orchestration canvas",
     "resizeCanvas": "Resize canvas"
   },
-  "codingTask": {
-    "title": "CodingTask",
-    "empty": "No task bound",
-    "emptyHint": "This conversation has no CodingTask yet. Create one to maintain Spec, Plan, and Tasks trace artifacts here.",
-    "create": "Create CodingTask",
-    "refresh": "Refresh CodingTask",
-    "status": "Status",
-    "profile": "Profile",
-    "agent": "Agent",
-    "unset": "Not set",
-    "save": "Save",
-    "tabs": {
-      "spec": "Spec",
-      "plan": "Plan",
-      "tasks": "Tasks"
-    },
-    "templates": {
-      "spec": "## Spec\n\n- Goal:\n- Target chip: HK64S8x\n- Constraints:\n- Risks:\n",
-      "plan": "## Plan\n\n1. Review peripheral registers and initialization order\n2. Implement the minimal code path\n3. Add acceptance and regression checks\n",
-      "tasks": "## Tasks\n\n- [ ] Clarify I/O and chip constraints\n- [ ] Implement the change\n- [ ] Add the checklist\n"
-    }
-  },
   "history": {
     "noHistory": "No chat history",
     "deleteTitle": "Delete",

@@ -5,7 +5,6 @@ export { default as SiderMcpEntry } from './SiderMcpEntry';
 export { default as SiderKnowledgeEntry } from './SiderKnowledgeEntry';
 export { default as SiderModelHubEntry } from './SiderModelHubEntry';
 export { default as SiderNewConversationEntry } from './SiderNewConversationEntry';
-export { default as SiderNomiEntry } from './SiderNomiEntry';
 export { default as SiderOpenCapabilitiesEntry } from './SiderOpenCapabilitiesEntry';
 export { default as SiderRequirementsEntry } from './SiderRequirementsEntry';
 export { default as SiderScheduledEntry } from './SiderScheduledEntry';

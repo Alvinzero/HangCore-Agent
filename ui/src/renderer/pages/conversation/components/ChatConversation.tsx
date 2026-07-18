@@ -21,7 +21,6 @@ import { emitter } from '../../../utils/emitter';
 import AcpChat from '../platforms/acp/AcpChat';
 import ChatLayout from './ChatLayout';
 import ChatSlider from './ChatSlider.tsx';
-import CodingTaskPanel from './CodingTaskPanel';
 import NanobotChat from '../platforms/nanobot/NanobotChat';
 import OpenClawChat from '../platforms/openclaw/OpenClawChat';
 import RemoteChat from '../platforms/remote/RemoteChat';
@@ -46,7 +45,6 @@ const hasLoadedSkill = (conversation: TChatConversation | undefined, skillName: 
 
 const ConversationWorkspaceSider: React.FC<{ conversation?: TChatConversation }> = ({ conversation }) => (
   <div className='h-full flex flex-col min-h-0'>
-    <CodingTaskPanel conversation={conversation} />
     <div className='flex-1 min-h-0 overflow-hidden'>
       <ChatSlider conversation={conversation} />
     </div>

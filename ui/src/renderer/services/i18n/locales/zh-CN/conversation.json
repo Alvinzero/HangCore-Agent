@@ -28,28 +28,6 @@
     "expandCanvas": "展开编排画布",
     "resizeCanvas": "调整画布宽度"
   },
-  "codingTask": {
-    "title": "CodingTask",
-    "empty": "未绑定任务",
-    "emptyHint": "当前会话还没有 CodingTask。创建后可在这里维护 Spec、Plan、Tasks 追溯产物。",
-    "create": "创建 CodingTask",
-    "refresh": "刷新 CodingTask",
-    "status": "状态",
-    "profile": "Profile",
-    "agent": "Agent",
-    "unset": "未设置",
-    "save": "保存",
-    "tabs": {
-      "spec": "Spec",
-      "plan": "Plan",
-      "tasks": "Tasks"
-    },
-    "templates": {
-      "spec": "## Spec\n\n- 目标：\n- 目标芯片：HK64S8x\n- 约束：\n- 风险：\n",
-      "plan": "## Plan\n\n1. 梳理外设寄存器与初始化顺序\n2. 实现最小代码路径\n3. 增加验收与回归检查\n",
-      "tasks": "## Tasks\n\n- [ ] 明确输入输出与芯片约束\n- [ ] 编写实现\n- [ ] 补充检查清单\n"
-    }
-  },
   "history": {
     "noHistory": "暂无对话历史",
     "deleteTitle": "删除",
