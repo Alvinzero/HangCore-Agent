@@ -35,6 +35,9 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper",
         "silent": true
+      },
+      "nsis": {
+        "installerHooks": "nsis/install-identity-migration.nsh"
       }
     }
   },
