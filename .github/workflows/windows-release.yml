@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.12"
+        default: "0.1.13"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HK AI Platform v0.1.12 fixes native Kun user-input interaction stalls and keeps multi-step 8位MCU Profile conversations on the real Kun runtime loop."
+        default: "HK AI Platform v0.1.13 improves 8位MCU Profile Chinese reasoning and workspace delivery, reduces the managed Kun runtime package, removes the update disclaimer, and migrates legacy HangCore Agent Windows installs."
   push:
     tags:
       - "v*.*.*"

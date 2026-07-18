@@ -5,6 +5,14 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
+## v0.1.13 - 2026-07-18
+
+- Required all built-in and newly added Agents to save generated code and document deliverables into the active workspace so the files appear in the conversation workspace panel.
+- Strengthened Chinese output constraints for the 8位MCU Profile's visible Kun reasoning stream while preserving the native Kun runtime loop.
+- Reduced managed Kun runtime package clutter to improve Windows package extraction and installation time without removing runtime entry files.
+- Removed the automatic-update disclaimer from the update dialog.
+- Migrated legacy `HangCore Agent` Windows installs, shortcuts, and startup entries to `HK AI Platform` while preserving model settings, API keys, conversations, and workspace data.
+
 ## v0.1.12 - 2026-07-16
 
 - Fixed the ACP stdio deadlock that prevented NomiFun from delivering user-input responses while a native Kun prompt was still running.
