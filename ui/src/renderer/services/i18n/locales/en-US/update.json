@@ -8,7 +8,6 @@
   "downloadSourceHint": "This update downloads installers from GitHub Releases.",
   "productWebsiteHint": "Company website:",
   "productWebsiteLink": "Product website",
-  "disclaimer": "Disclaimer: This is a free, nonprofit, open-source project. The project authors are not responsible for any user data loss or damage caused by version updates. Please upgrade with care.",
   "releaseFeedUnavailable": "Could not load a valid update feed. You can retry, or check Releases and the company website manually.",
   "noReleaseNotes": "No release notes provided.",
   "downloadingTitle": "Downloading update...",

@@ -302,10 +302,6 @@ const UpdateModal: React.FC = () => {
     });
   };
 
-  const renderDisclaimer = (className = '') => (
-    <div className={`text-12px leading-18px text-[rgb(var(--warning-6))] ${className}`}>{t('update.disclaimer')}</div>
-  );
-
   const renderContent = () => {
     switch (status) {
       case 'checking':
@@ -515,9 +511,6 @@ const UpdateModal: React.FC = () => {
     >
       <div className='flex flex-col h-full w-full'>
         <div className='min-h-0 flex-1'>{renderContent()}</div>
-        {renderDisclaimer(
-          'shrink-0 border-t border-solid border-[rgba(var(--warning-6),0.18)] bg-fill-1/60 px-20px py-10px text-center'
-        )}
       </div>
     </NomiModal>
   );

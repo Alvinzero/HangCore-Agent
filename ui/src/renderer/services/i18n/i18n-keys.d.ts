@@ -4031,7 +4031,6 @@ export type I18nKey =
   | 'update.checkFailed'
   | 'update.checking'
   | 'update.currentVersion'
-  | 'update.disclaimer'
   | 'update.downloadAndInstall'
   | 'update.downloadButton'
   | 'update.downloadCompleteTitle'

@@ -8,7 +8,6 @@
   "downloadSourceHint": "本次更新基于 GitHub Release 进行安装包下载。",
   "productWebsiteHint": "公司官网：",
   "productWebsiteLink": "产品官网",
-  "disclaimer": "免责声明：这是一个公益免费开源项目，故项目作者不承担任何版本迭代导致用户数据丢失、损坏的后果，请谨慎进行升级。",
   "releaseFeedUnavailable": "暂时无法获取有效的更新信息。你可以重试，或前往 Release 页面、公司官网手动查看最新版本。",
   "noReleaseNotes": "暂无更新说明。",
   "downloadingTitle": "正在下载更新...",
