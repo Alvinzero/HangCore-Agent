@@ -45,7 +45,7 @@ export class KunAcpAgent {
       case 'initialize':
         return {
           protocolVersion: typeof params.protocolVersion === 'number' ? params.protocolVersion : PROTOCOL_VERSION,
-          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.13' },
+          agentInfo: { name: 'Kun ACP Adapter', version: '0.1.15' },
           agentCapabilities: {
             loadSession: false,
             promptCapabilities: {},

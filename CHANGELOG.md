@@ -5,6 +5,12 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
+## v0.1.15 - 2026-07-22
+
+- Consolidated the recent Kun interaction, Chinese reasoning, workspace delivery, updater, managed runtime, and Windows install identity fixes onto the main release line.
+- Removed unused desktop companion, resource card, intelligent orchestration, and CodingTask surfaces from the main workbench UI while keeping the underlying settings/runtime capabilities intact.
+- Kept the GitHub Actions Windows release path producing the Tauri updater assets: `.exe`, `.exe.sig`, and `latest.json`.
+
 ## v0.1.13 - 2026-07-18
 
 - Required all built-in and newly added Agents to save generated code and document deliverables into the active workspace so the files appear in the conversation workspace panel.
