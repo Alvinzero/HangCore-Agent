@@ -5,6 +5,12 @@ notes at a high level rather than a complete historical log.
 
 ## Unreleased
 
+## v0.1.16 - 2026-07-23
+
+- Updated the desktop updater so one approved update automatically downloads, installs, and restarts the application without a second install confirmation.
+- Embedded the managed Kun runtime as one verified compressed archive in Windows release builds instead of shipping thousands of individual runtime files, reducing NSIS extraction overhead.
+- Added an atomic, content-addressed runtime cache with a file lock, checksum, entrypoint validation, and background prewarming so later launches reuse the extracted runtime.
+
 ## v0.1.15 - 2026-07-22
 
 - Consolidated the recent Kun interaction, Chinese reasoning, workspace delivery, updater, managed runtime, and Windows install identity fixes onto the main release line.

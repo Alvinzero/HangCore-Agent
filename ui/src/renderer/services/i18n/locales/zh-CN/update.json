@@ -19,6 +19,8 @@
   "noCompatibleAssetManual": "当前系统架构没有匹配的安装包，请前往 Release 页面手动下载对应版本。",
   "goToRelease": "前往 Release",
   "downloadCompleteTitle": "下载完成",
+  "installingTitle": "正在安装并重启...",
+  "installingDesc": "更新完成后应用会自动重新打开，请稍候。",
   "readyToInstall": "准备安装",
   "readyToInstallDesc": "更新已下载完成，点击下方按钮重启应用并安装更新。",
   "installNow": "立即安装",

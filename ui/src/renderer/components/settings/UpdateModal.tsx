@@ -6,8 +6,8 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Progress, Message } from '@arco-design/web-react';
-import { CheckOne, Download, FolderOpen, Refresh, CloseOne, Install } from '@icon-park/react';
+import { Button, Progress } from '@arco-design/web-react';
+import { CheckOne, Download, FolderOpen, Refresh, CloseOne } from '@icon-park/react';
 import { ipcBridge } from '@/common';
 import NomiModal from '@/renderer/components/base/NomiModal';
 import MarkdownView from '@/renderer/components/Markdown';
@@ -15,7 +15,15 @@ import type { UpdateDownloadProgressEvent, UpdateReleaseInfo, AutoUpdateStatus }
 import { useTranslation } from 'react-i18next';
 import { getUpdateErrorMessageKey } from './updateErrorMessage';
 
-type UpdateStatus = 'checking' | 'upToDate' | 'available' | 'downloading' | 'downloaded' | 'success' | 'error';
+type UpdateStatus =
+  | 'checking'
+  | 'upToDate'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'success'
+  | 'error';
 
 type UpdateInfo = UpdateReleaseInfo;
 
@@ -130,6 +138,18 @@ const UpdateModal: React.FC = () => {
     }
   };
 
+  const installAndRestart = async () => {
+    setStatus('installing');
+    try {
+      await ipcBridge.autoUpdate.quitAndInstall.invoke();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Install failed:', err);
+      setErrorMsg(msg);
+      setStatus('error');
+    }
+  };
+
   const startDownload = async () => {
     if (!updateInfo && !autoUpdateAvailable) return;
     setStatus('downloading');
@@ -159,6 +179,10 @@ const UpdateModal: React.FC = () => {
         if (!res?.success) {
           throw new Error(res?.msg || t('update.downloadStartFailed'));
         }
+        // Tauri keeps the signed update handle alive across download/install.
+        // Install immediately after the download resolves so the user only
+        // needs to approve the update once.
+        await installAndRestart();
         return;
       }
 
@@ -168,16 +192,6 @@ const UpdateModal: React.FC = () => {
       console.error('Download failed:', err);
       setErrorMsg(msg);
       setStatus('error');
-    }
-  };
-
-  const quitAndInstall = async () => {
-    try {
-      await ipcBridge.autoUpdate.quitAndInstall.invoke();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('Install failed:', err);
-      Message.error(msg);
     }
   };
 
@@ -425,26 +439,14 @@ const UpdateModal: React.FC = () => {
         );
 
       case 'downloaded':
+      case 'installing':
         return (
           <div className='flex flex-col items-center justify-center py-48px px-32px'>
-            <div className='w-56px h-56px bg-[rgb(var(--success-6))]/12 rounded-full flex items-center justify-center mb-20px'>
-              <CheckOne theme='filled' size='28' fill='rgb(var(--success-6))' />
+            <div className='w-56px h-56px bg-[rgb(var(--primary-6))]/12 rounded-full flex items-center justify-center mb-20px'>
+              <Download size='24' fill='rgb(var(--primary-6))' className='animate-bounce' />
             </div>
-            <div className='text-16px text-t-primary font-600 mb-8px'>{t('update.readyToInstall')}</div>
-            <div className='mb-24px text-13px text-[rgb(var(--warning-6))] max-w-360px text-center'>
-              {t('update.installWarning')}
-            </div>
-            <div className='flex flex-wrap justify-center gap-12px'>
-              <Button
-                type='primary'
-                size='small'
-                onClick={quitAndInstall}
-                icon={<Install size='14' />}
-                className='!px-16px'
-              >
-                {t('update.installNow')}
-              </Button>
-            </div>
+            <div className='text-16px text-t-primary font-600 mb-8px'>{t('update.installingTitle')}</div>
+            <div className='text-13px text-t-tertiary max-w-360px text-center'>{t('update.installingDesc')}</div>
           </div>
         );
 

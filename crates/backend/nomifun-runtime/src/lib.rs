@@ -10,14 +10,26 @@ mod embed;
 mod extract;
 #[cfg(windows)]
 mod job;
+mod kun_embed;
+mod kun_extract;
+mod kun_runtime;
 mod resolver;
 mod shell_env;
 
 pub use cache::{init, runtime_root};
+pub use kun_runtime::KunRuntimeError;
 pub use resolver::{ResolveError, bun_bin_dir, resolve_bun, resolve_command_in, resolve_command_path};
 pub use shell_env::{enhance_process_path, managed_kun_runtime_dir};
 mod spawn;
 pub use spawn::{Builder, kill_process_tree};
+
+pub fn has_embedded_kun_runtime() -> bool {
+    kun_runtime::has_embedded_runtime()
+}
+
+pub fn warm_managed_kun_runtime() -> Result<Option<std::path::PathBuf>, KunRuntimeError> {
+    kun_runtime::resolve_embedded_runtime()
+}
 
 #[cfg(test)]
 #[path = "../build_support.rs"]

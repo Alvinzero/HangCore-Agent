@@ -4026,6 +4026,8 @@ export type I18nKey =
   | 'update.goToRelease'
   | 'update.installNow'
   | 'update.installWarning'
+  | 'update.installingDesc'
+  | 'update.installingTitle'
   | 'update.modalTitle'
   | 'update.noCompatibleAsset'
   | 'update.noCompatibleAssetManual'

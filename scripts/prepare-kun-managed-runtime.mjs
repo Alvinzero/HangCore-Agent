@@ -167,10 +167,12 @@ function hasCurrentManifest(dir) {
   if (!existsSync(manifestPath)) return false;
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const expectedRef = process.env.KUN_MANAGED_REF || DEFAULT_REF;
     return (
       manifest.runtime === 'kun' &&
       manifest.layoutVersion === 1 &&
-      manifest.bundleCleanupVersion === BUNDLE_CLEANUP_VERSION
+      manifest.bundleCleanupVersion === BUNDLE_CLEANUP_VERSION &&
+      manifest.ref === expectedRef
     );
   } catch {
     return false;

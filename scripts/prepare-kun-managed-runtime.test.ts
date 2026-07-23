@@ -169,6 +169,46 @@ describe('prepare-kun-managed-runtime', () => {
     expect(manifest.bundleCleanupVersion).toBe(1);
   });
 
+  test('rebuilds when the managed Kun source ref changes', () => {
+    const root = mkTemp('kun-managed-ref-test-');
+    const source = join(root, 'Kun');
+    const output = join(root, 'managed-runtimes', 'kun');
+    mkdirSync(join(source, 'kun', 'dist', 'cli'), { recursive: true });
+    mkdirSync(join(source, 'kun', 'node_modules', 'zod'), { recursive: true });
+    mkdirSync(join(output, 'kun', 'dist', 'cli'), { recursive: true });
+    mkdirSync(join(output, 'kun', 'node_modules'), { recursive: true });
+    writeFileSync(join(source, 'kun', 'package.json'), JSON.stringify({ name: 'kun', version: 'new' }));
+    writeFileSync(join(source, 'kun', 'dist', 'cli', 'serve-entry.js'), 'process.exit(0);\n');
+    writeFileSync(join(source, 'kun', 'node_modules', 'zod', 'package.json'), JSON.stringify({ name: 'zod' }));
+    writeFileSync(join(output, 'kun', 'package.json'), JSON.stringify({ name: 'kun', version: 'old' }));
+    writeFileSync(join(output, 'kun', 'dist', 'cli', 'serve-entry.js'), 'throw new Error("stale");\n');
+    writeFileSync(
+      join(output, 'hangcore-managed-runtime.json'),
+      JSON.stringify({ runtime: 'kun', layoutVersion: 1, bundleCleanupVersion: 1, ref: 'old-ref' })
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve('scripts/prepare-kun-managed-runtime.mjs'),
+        '--source-dir',
+        source,
+        '--output-dir',
+        output,
+        '--skip-build',
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, KUN_MANAGED_REF: 'new-ref' },
+      }
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(output, 'kun', 'package.json'), 'utf8')).toContain('"version":"new"');
+    const manifest = JSON.parse(readFileSync(join(output, 'hangcore-managed-runtime.json'), 'utf8'));
+    expect(manifest.ref).toBe('new-ref');
+  });
+
   test('removes non-runtime package clutter from copied node_modules', () => {
     const root = mkTemp('kun-managed-clean-test-');
     const source = join(root, 'Kun');

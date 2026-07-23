@@ -498,6 +498,16 @@ fn main() -> std::process::ExitCode {
     nomifun_runtime::init(&data_dir);
     // SAFETY: no worker threads exist yet (Tauri's runtime is built by .run()).
     let merged_path = unsafe { nomifun_runtime::enhance_process_path() };
+    if nomifun_runtime::has_embedded_kun_runtime() {
+        std::thread::Builder::new()
+            .name("kun-runtime-prewarm".to_owned())
+            .spawn(|| {
+                if let Err(error) = nomifun_runtime::warm_managed_kun_runtime() {
+                    tracing::warn!(error = %error, "failed to prewarm embedded Kun runtime");
+                }
+            })
+            .expect("spawn Kun runtime prewarm thread");
+    }
 
     // Backend config. The desktop does NOT use `--local`: `DesktopServer::start`
     // runs the backend under `TrustLocalToken` (trusts only its own webview via

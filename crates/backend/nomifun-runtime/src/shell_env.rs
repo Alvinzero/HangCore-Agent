@@ -266,7 +266,17 @@ pub fn managed_kun_runtime_dir() -> Option<PathBuf> {
         candidates.extend(managed_kun_runtime_candidates_from_exe_dir(exe_dir));
     }
 
-    select_managed_kun_runtime_dir(candidates)
+    if let Some(path) = select_managed_kun_runtime_dir(candidates) {
+        return Some(path);
+    }
+
+    match crate::kun_runtime::resolve_embedded_runtime() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to prepare embedded Kun runtime");
+            None
+        }
+    }
 }
 
 fn adapter_bin_candidates_from_exe_dir(exe_dir: &Path) -> Vec<PathBuf> {

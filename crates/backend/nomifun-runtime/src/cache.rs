@@ -65,6 +65,15 @@ pub fn bun_dir(version: &str, sha256: &str) -> Option<PathBuf> {
     runtime_root().map(|root| root.join(bun_dir_name(version, sha256)))
 }
 
+pub fn kun_dir_name(sha256: &str) -> String {
+    let sha12 = &sha256[..12.min(sha256.len())];
+    format!("kun-{sha12}")
+}
+
+pub fn kun_dir(sha256: &str) -> Option<PathBuf> {
+    runtime_root().map(|root| root.join(kun_dir_name(sha256)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +106,10 @@ mod tests {
         let dir = bun_dir("1.1.38", "deadbeefcafebabe").expect("cache available");
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(name, "bun-1.1.38-deadbeefcafe");
+    }
+
+    #[test]
+    fn kun_dir_uses_content_hash() {
+        assert_eq!(kun_dir_name("deadbeefcafebabe"), "kun-deadbeefcafe");
     }
 }

@@ -134,6 +134,7 @@ foreach ($t in $triples) {
   Write-Host "▶▶▶ 构建 $t ..."
   $env:CI = 'true'
   $env:NOMIFUN_EMBED_BUN = '1'
+  $env:NOMIFUN_EMBED_KUN_RUNTIME = '1'
   # 第二个 --config 把 bundle.targets 锁成单一 NSIS(tauri.conf.json 里是全平台全列表)。
   # 用配置文件而非内联 JSON:PowerShell 5.1 会剥掉传给原生程序的双引号,内联 JSON 必坏。
   & bun x tauri build --config $Conf --config $WinConf --target $t @signConfig @passthru

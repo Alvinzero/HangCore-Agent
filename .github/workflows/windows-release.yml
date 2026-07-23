@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without leading v"
         required: true
-        default: "0.1.15"
+        default: "0.1.16"
       notes:
         description: "GitHub Release notes and updater notes"
         required: false
-        default: "HK AI Platform v0.1.15 consolidates recent Kun interaction, workspace delivery, updater, and managed runtime fixes, and removes unused desktop companion, resource, orchestration, and CodingTask surfaces from the main UI."
+        default: "HK AI Platform v0.1.16 installs signed updates after a single click and embeds the managed Kun runtime as one verified archive, reducing Windows installer extraction overhead while preserving the native Kun runtime loop."
   push:
     tags:
       - "v*.*.*"
